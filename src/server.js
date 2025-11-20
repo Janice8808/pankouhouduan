@@ -438,14 +438,37 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
   res.json({ success: true, withdraw: wd });
 });
 
-// ========== 币种列表 ==========
-app.get("/api/coins", (req, res) => {
-  res.json([
-    { symbol: "BTCUSDT", name: "Bitcoin" },
-    { symbol: "ETHUSDT", name: "Ethereum" },
-    { symbol: "SOLUSDT", name: "Solana" },
-  ]);
+// ========== 币种 + 实时价格列表 ==========
+app.get("/api/coins", async (req, res) => {
+  try {
+    const symbols = [
+      "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+      "DOGEUSDT","ADAUSDT","TRXUSDT","AVAXUSDT","DOTUSDT",
+      "LTCUSDT","UNIUSDT","LINKUSDT","ATOMUSDT","ETCUSDT",
+      "XMRUSDT","TONUSDT","APTUSDT","NEARUSDT","FTMUSDT",
+      "ALGOUSDT","SANDUSDT","MANAUSDT","ICPUSDT","FILUSDT"
+    ];
+
+    const reqs = symbols.map(s =>
+      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`)
+        .then(r => r.json())
+        .then(d => ({
+          symbol: d.symbol.replace("USDT", ""), // BTC
+          price: parseFloat(d.lastPrice).toFixed(4),
+          change: parseFloat(d.priceChangePercent).toFixed(2),
+          logo: `/images/coins/${d.symbol.replace("USDT", "")}.png`
+        }))
+    );
+
+    const data = await Promise.all(reqs);
+
+    res.json(data);
+  } catch (err) {
+    console.log("Error:", err);
+    res.status(500).json({ error: "fetch failed" });
+  }
 });
+
 
 // ========== K线数据 ==========
 app.get("/api/kline", async (req, res) => {
