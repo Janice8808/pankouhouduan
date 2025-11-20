@@ -537,18 +537,25 @@ server.on("upgrade", (req, socket, head) => {
       ws.path = "admin";
       wsServer.emit("connection", ws, req);
     });
-  } else if (req.url === "/ticker") {
-    wsServer.handleUpgrade(req, socket, head, (ws) => {
-      ws.path = "ticker";
-      wsServer.emit("connection", ws, req);
-    });
-  } else {
+} else if (req.url.startsWith("/ticker")) {
+  wsServer.handleUpgrade(req, socket, head, (ws) => {
+    ws.path = "ticker";
+    ws.query = req.url;  // 保存请求路径，包括 ?symbol=XXX
+    wsServer.emit("connection", ws, req);
+  });
+}
+ else {
     socket.destroy();
   }
 });
 
 const adminClients = new Set();
 const tickerClients = new Set();
+
+function parseSymbol(query) {
+  const match = query.match(/symbol=([^&]+)/);
+  return match ? match[1].toUpperCase() : "BTCUSDT";
+}
 
 wsServer.on("connection", (ws) => {
   if (ws.path === "admin") {
@@ -557,11 +564,34 @@ wsServer.on("connection", (ws) => {
     ws.on("close", () => adminClients.delete(ws));
   }
 
-  if (ws.path === "ticker") {
-    tickerClients.add(ws);
-    console.log("Ticker WS connected");
-    ws.on("close", () => tickerClients.delete(ws));
-  }
+if (ws.path === "ticker") {
+  const symbol = parseSymbol(ws.query);
+  console.log("📡 用户订阅行情:", symbol);
+
+  // 每个前端一个 Binance WS
+  const binanceWS = new WebSocket(
+    `wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@ticker`
+  );
+
+  ws.binance = binanceWS;
+
+  binanceWS.on("message", (msg) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  });
+
+  binanceWS.on("open", () => {
+    console.log("📡 Binance 已连接:", symbol);
+  });
+
+  binanceWS.on("close", () => {
+    console.log("⚠️ Binance WS closed:", symbol);
+  });
+
+  ws.on("close", () => {
+    console.log("⚠️ 前端关闭:", symbol);
+    if (ws.binance) ws.binance.close();
+  });
+}
 });
 
 // 推送到后台
