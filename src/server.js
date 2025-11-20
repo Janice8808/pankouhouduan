@@ -1,10 +1,10 @@
 // ========== 基础依赖 ==========
+const fetch = require("node-fetch");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 const WebSocket = require("ws");
-const fetch = require("node-fetch");
 
 dotenv.config();
 
