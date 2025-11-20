@@ -20,6 +20,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const users = new Map();
 const nonces = new Map();
 const withdraws = new Map();
+const orders = new Map();  // 新增：订单内存表
 
 // UID 从 200101 开始
 let nextUID = 200101;
@@ -285,6 +286,11 @@ app.get("/admin/users", adminAuthMiddleware, (req, res) => {
   }));
   res.json(list);
 });
+// 管理员查看全部订单
+app.get("/admin/orders", adminAuthMiddleware, (req, res) => {
+  const list = Array.from(orders.values());
+  res.json(list);
+});
 
 app.post("/admin/balance/add", adminAuthMiddleware, (req, res) => {
   const { address, symbol, amount } = req.body || {};
@@ -308,29 +314,112 @@ app.post("/admin/user/control", adminAuthMiddleware, (req, res) => {
 });
 
 // ========== 订单系统 ==========
+// 下单接口（扣余额 + 记录订单 + 推送后台）
 app.post("/api/order/create", authMiddleware, (req, res) => {
-  const { symbol, amount } = req.body || {};
+  const { symbol, amount, direction } = req.body || {}; // direction: LONG / SHORT
   const { address } = req.user;
 
+  if (!symbol || !amount || !direction) {
+    return res
+      .status(400)
+      .json({ message: "缺少字段 symbol/amount/direction" });
+  }
+
   const user = createUserIfNotExists(address);
+
+  // 校验余额
+  if (user.balances.USDT < amount) {
+    return res.status(400).json({ message: "余额不足" });
+  }
+
+  // 扣除保证金
+  user.balances.USDT -= amount;
 
   const order = {
     id: "ord_" + Date.now(),
     wallet: user.wallet,
     symbol,
     amount,
-    remark: user.remark || "",
+    direction, // LONG / SHORT
+    status: "open",
+    profit: 0,
     createdAt: Date.now(),
   };
 
-  // 推送给后台
+  // 存入内存数据库
+  orders.set(order.id, order);
+
+  // 推送给后台 WebSocket
   broadcastToAdmins({
     type: "NEW_ORDER",
     order,
   });
 
-  res.json({ success: true, order });
+  res.json({
+    success: true,
+    order,
+    balances: user.balances,
+  });
 });
+
+// 我的订单列表
+app.get("/api/order/list", authMiddleware, (req, res) => {
+  const { address } = req.user;
+
+  // 当前用户的钱包地址
+  const user = createUserIfNotExists(address);
+
+  const list = Array.from(orders.values()).filter(
+    (o) => o.wallet === user.wallet
+  );
+
+  res.json(list);
+});
+
+// 结算订单（根据输赢返还余额）
+app.post("/api/order/settle", authMiddleware, (req, res) => {
+  const { orderId, isWin, percent } = req.body || {};
+  const { address } = req.user;
+
+  if (!orderId || typeof isWin === "undefined" || typeof percent === "undefined") {
+    return res
+      .status(400)
+      .json({ message: "缺少字段 orderId / isWin / percent" });
+  }
+
+  const user = createUserIfNotExists(address);
+  const order = orders.get(orderId);
+
+  if (!order) {
+    return res.status(400).json({ message: "订单不存在" });
+  }
+
+  if (order.wallet !== user.wallet) {
+    return res.status(403).json({ message: "不能操作别人的订单" });
+  }
+
+  if (order.status === "closed") {
+    return res.status(400).json({ message: "订单已结算" });
+  }
+
+  // 计算盈亏
+  const profit = isWin ? order.amount * percent : -order.amount;
+
+  // 本金 + 盈亏 一起退回或扣完
+  user.balances.USDT += order.amount + profit;
+
+  // 更新订单
+  order.status = "closed";
+  order.closedAt = Date.now();
+  order.profit = profit;
+
+  res.json({
+    success: true,
+    order,
+    balances: user.balances,
+  });
+});
+
 // ====== 修改提现密码 ======
 app.post("/api/withdrawal-password", authMiddleware, (req, res) => {
   const { password } = req.body || {};
