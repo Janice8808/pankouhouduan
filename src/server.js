@@ -470,7 +470,7 @@ app.get("/api/coins", async (req, res) => {
           symbol: sym,
           price: last.toFixed(4),
           change: change.toFixed(2),
-          logo: `/images/coins/${sym}.png`
+          logo: `https://cryptoicons.org/api/icon/${sym.toLowerCase()}/64`,
         });
       } catch (e) {
         results.push(null);
