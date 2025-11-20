@@ -20,7 +20,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const users = new Map();
 const nonces = new Map();
 const withdraws = new Map();
-const orders = new Map();  // 新增：订单内存表
+const orders = new Map();  
 
 // UID 从 200101 开始
 let nextUID = 200101;
@@ -63,7 +63,7 @@ function authMiddleware(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload; // { address }
+    req.user = payload; 
   } catch {
     return res.status(401).json({ message: "token 无效" });
   }
@@ -105,7 +105,6 @@ app.post("/api/auth/verify", (req, res) => {
 
   const user = createUserIfNotExists(address);
 
-  // 登录记录
   user.loginCount++;
   user.lastLogin = Date.now();
   const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
@@ -116,24 +115,19 @@ app.post("/api/auth/verify", (req, res) => {
   res.json({ token, userId: user.addressLabel, address });
 });
 
-// ========== 用户余额（允许游客访问） ==========
+// ========== 用户余额 ==========
 app.get("/api/user/balance", (req, res) => {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
 
-  // 没 token = 游客模式 → 返回默认余额
   if (!token) {
     return res.json({
       userId: "0",
       wallet: "guest",
-      balances: {
-        USDT: 0,
-        BTC: 0,
-      },
+      balances: { USDT: 0, BTC: 0 },
     });
   }
 
-  // -------- 有 token 的正常逻辑 --------
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = createUserIfNotExists(payload.address);
@@ -143,21 +137,16 @@ app.get("/api/user/balance", (req, res) => {
       wallet: user.wallet,
       balances: user.balances,
     });
-  } catch (err) {
-    // token 错误也按游客处理，避免报错
+  } catch {
     return res.json({
       userId: "0",
       wallet: "guest",
-      balances: {
-        USDT: 0,
-        BTC: 0,
-      },
+      balances: { USDT: 0, BTC: 0 },
     });
   }
 });
 
-
-// ⭐ 用户信息（给 AuthContext 用）
+// ⭐ 用户信息
 app.get("/api/userinfo", authMiddleware, (req, res) => {
   const { address } = req.user;
   const user = createUserIfNotExists(address);
@@ -177,7 +166,7 @@ app.get("/api/userinfo", authMiddleware, (req, res) => {
   });
 });
 
-// ====== 结算接口 ======
+// ====== 用户余额结算 ======
 app.post("/api/user/balance/settle", authMiddleware, (req, res) => {
   const { amount, isWin, percent, symbol } = req.body || {};
   const { address } = req.user;
@@ -197,28 +186,12 @@ app.post("/api/user/balance/settle", authMiddleware, (req, res) => {
 // ====== 用户提交 Mail ======
 app.post("/api/mail", async (req, res) => {
   const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: "Email is required" });
 
-  if (!email) {
-    return res.status(400).json({ error: "Email is required" });
-  }
-
-  // 在你后台记录一下（你想存在哪都可以，现在先简单收集）
   console.log("📧 New mail submitted:", email);
-
   return res.json({ message: "Mail submitted successfully!" });
 });
 
-// ====== 用户信息（含语言） ======
-app.get("/api/userinfo", authMiddleware, (req, res) => {
-  const { address } = req.user;
-  const user = createUserIfNotExists(address);
-
-  res.json({
-    wallet: user.wallet,
-    userId: user.addressLabel,
-    language: user.language || "English",
-  });
-});
 // ====== 设置语言 ======
 app.post("/api/language", authMiddleware, (req, res) => {
   const { address } = req.user;
@@ -233,14 +206,12 @@ app.post("/api/language", authMiddleware, (req, res) => {
 });
 
 // ====== 绑定银行卡 ======
-// POST /api/bankcard  { name, cardNumber, bankName }
 app.post("/api/bankcard", authMiddleware, (req, res) => {
   const { name, cardNumber, bankName } = req.body || {};
   const { address } = req.user;
 
-  if (!name || !cardNumber || !bankName) {
+  if (!name || !cardNumber || !bankName)
     return res.status(400).json({ error: "缺少字段 name/cardNumber/bankName" });
-  }
 
   const user = createUserIfNotExists(address);
 
@@ -251,7 +222,7 @@ app.post("/api/bankcard", authMiddleware, (req, res) => {
     updatedAt: Date.now(),
   };
 
-  return res.json({
+  res.json({
     success: true,
     message: "Bank card submitted successfully!",
     bankCard: user.bankCard,
@@ -275,23 +246,23 @@ app.get("/admin/users", adminAuthMiddleware, (req, res) => {
     remark: u.remark,
     controlMode: u.controlMode,
     balances: u.balances,
-
     loginCount: u.loginCount,
     lastLogin: u.lastLogin,
     registerIp: u.registerIp,
     lastLoginIp: u.lastLoginIp,
     createdAt: u.createdAt,
-
     verifyStatus: u.verifyStatus,
   }));
   res.json(list);
 });
+
 // 管理员查看全部订单
 app.get("/admin/orders", adminAuthMiddleware, (req, res) => {
   const list = Array.from(orders.values());
   res.json(list);
 });
 
+// 管理员加余额
 app.post("/admin/balance/add", adminAuthMiddleware, (req, res) => {
   const { address, symbol, amount } = req.body || {};
   if (!address || !symbol || typeof amount !== "number")
@@ -303,6 +274,7 @@ app.post("/admin/balance/add", adminAuthMiddleware, (req, res) => {
   res.json({ success: true, balances: user.balances });
 });
 
+// 用户风控设置
 app.post("/admin/user/control", adminAuthMiddleware, (req, res) => {
   const { address, mode, remark } = req.body || {};
   const user = createUserIfNotExists(address);
@@ -314,9 +286,9 @@ app.post("/admin/user/control", adminAuthMiddleware, (req, res) => {
 });
 
 // ========== 订单系统 ==========
-// 下单接口（扣余额 + 记录订单 + 推送后台）
+// 下单接口
 app.post("/api/order/create", authMiddleware, (req, res) => {
-  const { symbol, amount, direction } = req.body || {}; // direction: LONG / SHORT
+  const { symbol, amount, direction } = req.body || {}; 
   const { address } = req.user;
 
   if (!symbol || !amount || !direction) {
@@ -327,12 +299,10 @@ app.post("/api/order/create", authMiddleware, (req, res) => {
 
   const user = createUserIfNotExists(address);
 
-  // 校验余额
   if (user.balances.USDT < amount) {
     return res.status(400).json({ message: "余额不足" });
   }
 
-  // 扣除保证金
   user.balances.USDT -= amount;
 
   const order = {
@@ -340,16 +310,14 @@ app.post("/api/order/create", authMiddleware, (req, res) => {
     wallet: user.wallet,
     symbol,
     amount,
-    direction, // LONG / SHORT
+    direction,
     status: "open",
     profit: 0,
     createdAt: Date.now(),
   };
 
-  // 存入内存数据库
   orders.set(order.id, order);
 
-  // 推送给后台 WebSocket
   broadcastToAdmins({
     type: "NEW_ORDER",
     order,
@@ -362,11 +330,9 @@ app.post("/api/order/create", authMiddleware, (req, res) => {
   });
 });
 
-// 我的订单列表
+// 用户订单列表
 app.get("/api/order/list", authMiddleware, (req, res) => {
   const { address } = req.user;
-
-  // 当前用户的钱包地址
   const user = createUserIfNotExists(address);
 
   const list = Array.from(orders.values()).filter(
@@ -376,7 +342,7 @@ app.get("/api/order/list", authMiddleware, (req, res) => {
   res.json(list);
 });
 
-// 结算订单（根据输赢返还余额）
+// 订单结算
 app.post("/api/order/settle", authMiddleware, (req, res) => {
   const { orderId, isWin, percent } = req.body || {};
   const { address } = req.user;
@@ -390,25 +356,13 @@ app.post("/api/order/settle", authMiddleware, (req, res) => {
   const user = createUserIfNotExists(address);
   const order = orders.get(orderId);
 
-  if (!order) {
-    return res.status(400).json({ message: "订单不存在" });
-  }
+  if (!order) return res.status(400).json({ message: "订单不存在" });
+  if (order.wallet !== user.wallet) return res.status(403).json({ message: "不能操作别人的订单" });
+  if (order.status === "closed") return res.status(400).json({ message: "订单已结算" });
 
-  if (order.wallet !== user.wallet) {
-    return res.status(403).json({ message: "不能操作别人的订单" });
-  }
-
-  if (order.status === "closed") {
-    return res.status(400).json({ message: "订单已结算" });
-  }
-
-  // 计算盈亏
   const profit = isWin ? order.amount * percent : -order.amount;
-
-  // 本金 + 盈亏 一起退回或扣完
   user.balances.USDT += order.amount + profit;
 
-  // 更新订单
   order.status = "closed";
   order.closedAt = Date.now();
   order.profit = profit;
@@ -418,22 +372,6 @@ app.post("/api/order/settle", authMiddleware, (req, res) => {
     order,
     balances: user.balances,
   });
-});
-
-// ====== 修改提现密码 ======
-app.post("/api/withdrawal-password", authMiddleware, (req, res) => {
-  const { password } = req.body || {};
-  const { address } = req.user;
-
-  if (!password) {
-    return res.status(400).json({ error: "Missing password" });
-  }
-
-  const user = createUserIfNotExists(address);
-
-  user.withdrawPassword = password; // 保存提现密码
-
-  return res.json({ message: "Withdrawal password updated successfully" });
 });
 
 // ========== 提币系统 ==========
@@ -464,11 +402,6 @@ app.post("/api/withdraw/create", authMiddleware, (req, res) => {
   res.json({ success: true, withdraw: wd });
 });
 
-app.get("/admin/withdraw/list", adminAuthMiddleware, (req, res) => {
-  res.json(Array.from(withdraws.values()));
-});
-
-// ====== 用户查询自己的提币记录 ======
 app.get("/api/withdraw/list", authMiddleware, (req, res) => {
   const { address } = req.user;
 
@@ -524,7 +457,7 @@ app.get("/api/kline", async (req, res) => {
   }
 });
 
-// ========== WebSocket 统一入口（Admin + Ticker） ==========
+// ========== WebSocket（仅后台通知用） ==========
 const server = app.listen(PORT, () => {
   console.log(`Backend running: http://localhost:${PORT}`);
 });
@@ -537,25 +470,12 @@ server.on("upgrade", (req, socket, head) => {
       ws.path = "admin";
       wsServer.emit("connection", ws, req);
     });
-} else if (req.url.startsWith("/ticker")) {
-  wsServer.handleUpgrade(req, socket, head, (ws) => {
-    ws.path = "ticker";
-    ws.query = req.url;  // 保存请求路径，包括 ?symbol=XXX
-    wsServer.emit("connection", ws, req);
-  });
-}
- else {
+  } else {
     socket.destroy();
   }
 });
 
 const adminClients = new Set();
-const tickerClients = new Set();
-
-function parseSymbol(query) {
-  const match = query.match(/symbol=([^&]+)/);
-  return match ? match[1].toUpperCase() : "BTCUSDT";
-}
 
 wsServer.on("connection", (ws) => {
   if (ws.path === "admin") {
@@ -563,53 +483,12 @@ wsServer.on("connection", (ws) => {
     console.log("Admin WS connected");
     ws.on("close", () => adminClients.delete(ws));
   }
-
-if (ws.path === "ticker") {
-  const symbol = parseSymbol(ws.query);
-  console.log("📡 用户订阅行情:", symbol);
-
-  // 每个前端一个 Binance WS
-  const binanceWS = new WebSocket(
-    `wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@ticker`
-  );
-
-  ws.binance = binanceWS;
-
-  binanceWS.on("message", (msg) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
-  });
-
-  binanceWS.on("open", () => {
-    console.log("📡 Binance 已连接:", symbol);
-  });
-
-  binanceWS.on("close", () => {
-    console.log("⚠️ Binance WS closed:", symbol);
-  });
-
-  ws.on("close", () => {
-    console.log("⚠️ 前端关闭:", symbol);
-    if (ws.binance) ws.binance.close();
-  });
-}
 });
 
-// 推送到后台
+// 推送后台通知
 function broadcastToAdmins(data) {
   const msg = JSON.stringify(data);
   adminClients.forEach((c) => {
     if (c.readyState === WebSocket.OPEN) c.send(msg);
   });
 }
-
-// Binance Ticker 转发
-const binanceWS = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@ticker");
-
-binanceWS.on("message", (msg) => {
-  tickerClients.forEach((c) => {
-    if (c.readyState === WebSocket.OPEN) c.send(msg);
-  });
-});
-
-binanceWS.on("open", () => console.log("Binance Ticker Connected"));
-binanceWS.on("error", (e) => console.log("Ticker Error:", e));
