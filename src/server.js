@@ -442,12 +442,12 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
 app.get("/api/coins", async (req, res) => {
   try {
     const symbols = [
-      "BTC-USDT","ETH-USDT","BNB-USDT","SOL-USDT","XRP-USDT",
-      "DOGE-USDT","ADA-USDT","TRX-USDT","AVAX-USDT","DOT-USDT",
-      "LTC-USDT","LINK-USDT","ATOM-USDT","FIL-USDT","BCH-USDT",
-      "MATIC-USDT","TON-USDT","ICP-USDT","APT-USDT","NEAR-USDT",
-      "SAND-USDT","MANA-USDT","ARB-USDT","OP-USDT","SUI-USDT"
-    ];
+  "BTC-USDT","ETH-USDT","SOL-USDT","BNB-USDT","XRP-USDT",
+  "DOGE-USDT","ADA-USDT","TRX-USDT","DOT-USDT","AVAX-USDT",
+  "LINK-USDT","MATIC-USDT","ATOM-USDT","LTC-USDT","FIL-USDT",
+  "TON-USDT","APT-USDT","NEAR-USDT","ICP-USDT","ARB-USDT",
+  "OP-USDT","SUI-USDT","BCH-USDT","ETC-USDT","XLM-USDT"
+];
 
     const reqs = symbols.map(async (inst) => {
       try {
