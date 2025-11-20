@@ -438,6 +438,7 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
   res.json({ success: true, withdraw: wd });
 });
 
+
 // ========== OKX 实时行情接口 ==========
 app.get("/api/coins", async (req, res) => {
   try {
@@ -452,29 +453,33 @@ app.get("/api/coins", async (req, res) => {
     const reqs = symbols.map(inst =>
       fetch(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`)
         .then(r => r.json())
-        .then(d => {
-          const item = d.data?.[0];
-          if (!item) return null;
+        .then(data => {
+          const d = data.data?.[0];
+          if (!d) return null;
 
-          const sym = inst.replace("-USDT", ""); // BTC
+          const sym = inst.replace("-USDT", "");
+
+          const changePercent =
+            ((parseFloat(d.last) - parseFloat(d.open24h)) / parseFloat(d.open24h)) * 100;
 
           return {
             symbol: sym,
-            price: parseFloat(item.last).toFixed(4),
-            change: (parseFloat(item.last) - parseFloat(item.open24h)) / parseFloat(item.open24h) * 100,
+            price: parseFloat(d.last).toFixed(4),
+            change: changePercent.toFixed(2),
             logo: `/images/coins/${sym}.png`
           };
         })
     );
 
     const results = await Promise.all(reqs);
-    res.json(results.filter(Boolean)); // 去掉 null
+    res.json(results.filter(Boolean));
 
   } catch (err) {
     console.error("OKX fetch error:", err);
     res.status(500).json({ error: "fetch failed" });
   }
 });
+
 
 // ========== K线数据 ==========
 app.get("/api/kline", async (req, res) => {
