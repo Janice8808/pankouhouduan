@@ -12,6 +12,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ⭐ 多币种接口
+const priceRouter = require("./routes/price");
+app.use("/api/prices", priceRouter);
+
+
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
