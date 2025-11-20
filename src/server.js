@@ -438,37 +438,43 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
   res.json({ success: true, withdraw: wd });
 });
 
-// ========== 币种 + 实时价格列表 ==========
+// ========== OKX 实时行情接口 ==========
 app.get("/api/coins", async (req, res) => {
   try {
     const symbols = [
-      "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-      "DOGEUSDT","ADAUSDT","TRXUSDT","AVAXUSDT","DOTUSDT",
-      "LTCUSDT","UNIUSDT","LINKUSDT","ATOMUSDT","ETCUSDT",
-      "XMRUSDT","TONUSDT","APTUSDT","NEARUSDT","FTMUSDT",
-      "ALGOUSDT","SANDUSDT","MANAUSDT","ICPUSDT","FILUSDT"
+      "BTC-USDT","ETH-USDT","BNB-USDT","SOL-USDT","XRP-USDT",
+      "DOGE-USDT","ADA-USDT","TRX-USDT","AVAX-USDT","DOT-USDT",
+      "LTC-USDT","UNI-USDT","LINK-USDT","ATOM-USDT","ETC-USDT",
+      "XMR-USDT","TON-USDT","APT-USDT","NEAR-USDT","FTM-USDT",
+      "ALGO-USDT","SAND-USDT","MANA-USDT","ICP-USDT","FIL-USDT"
     ];
 
-    const reqs = symbols.map(s =>
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`)
+    const reqs = symbols.map(inst =>
+      fetch(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`)
         .then(r => r.json())
-        .then(d => ({
-          symbol: d.symbol.replace("USDT", ""), // BTC
-          price: parseFloat(d.lastPrice).toFixed(4),
-          change: parseFloat(d.priceChangePercent).toFixed(2),
-          logo: `/images/coins/${d.symbol.replace("USDT", "")}.png`
-        }))
+        .then(d => {
+          const item = d.data?.[0];
+          if (!item) return null;
+
+          const sym = inst.replace("-USDT", ""); // BTC
+
+          return {
+            symbol: sym,
+            price: parseFloat(item.last).toFixed(4),
+            change: (parseFloat(item.last) - parseFloat(item.open24h)) / parseFloat(item.open24h) * 100,
+            logo: `/images/coins/${sym}.png`
+          };
+        })
     );
 
-    const data = await Promise.all(reqs);
+    const results = await Promise.all(reqs);
+    res.json(results.filter(Boolean)); // 去掉 null
 
-    res.json(data);
   } catch (err) {
-    console.log("Error:", err);
+    console.error("OKX fetch error:", err);
     res.status(500).json({ error: "fetch failed" });
   }
 });
-
 
 // ========== K线数据 ==========
 app.get("/api/kline", async (req, res) => {
