@@ -439,7 +439,23 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
 });
 
 // ========== OKX 实时行情接口 ==========
+// ======================
+//   行情缓存（全局变量）
+// ======================
+let cachedCoins = null;
+let lastFetchTime = 0;
+
+// ======================
+//   优化后的行情接口
+// ======================
 app.get("/api/coins", async (req, res) => {
+  const now = Date.now();
+
+  // ① 3 秒内重复访问 → 直接返回缓存（50~100ms）
+  if (cachedCoins && now - lastFetchTime < 3000) {
+    return res.json(cachedCoins);
+  }
+
   try {
     const symbols = [
       "BTC-USDT","ETH-USDT","BNB-USDT","SOL-USDT","XRP-USDT",
@@ -449,6 +465,7 @@ app.get("/api/coins", async (req, res) => {
       "SAND-USDT","MANA-USDT","ARB-USDT","OP-USDT","SUI-USDT"
     ];
 
+    // ② 并行发起所有 OKX 请求（Promise.all）
     const reqs = symbols.map(async (inst) => {
       try {
         const r = await fetch(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`);
@@ -467,20 +484,26 @@ app.get("/api/coins", async (req, res) => {
           change: change.toFixed(2),
           logo: `https://cryptoicons.org/api/icon/${sym.toLowerCase()}/64`,
         };
-      } catch (e) {
-        console.log("单个 OKX 失败:", inst, e.message);
+      } catch {
         return null;
       }
     });
 
-    const coins = await Promise.all(reqs);
-    res.json(coins.filter(Boolean));
+    // ③ 等待所有请求并过滤空数据
+    const coins = (await Promise.all(reqs)).filter(Boolean);
+
+    // ④ 写入缓存
+    cachedCoins = coins;
+    lastFetchTime = now;
+
+    res.json(coins);
 
   } catch (err) {
-    console.error("OKX fetch error:", err);
+    console.error("OKX error:", err);
     res.status(500).json({ error: "fetch failed" });
   }
 });
+
 
 
 // ========== K线数据 ==========
