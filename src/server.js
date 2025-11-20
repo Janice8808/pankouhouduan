@@ -438,52 +438,56 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
   res.json({ success: true, withdraw: wd });
 });
 
-
+// ========== OKX 实时行情接口 ==========
 app.get("/api/coins", async (req, res) => {
   try {
     const symbols = [
-      "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-      "DOGEUSDT","ADAUSDT","TRXUSDT","AVAXUSDT","DOTUSDT",
-      "LTCUSDT","UNIUSDT","LINKUSDT","ATOMUSDT","ETCUSDT",
-      "XMRUSDT","TONUSDT","APTUSDT","NEARUSDT","FTMUSDT",
-      "ALGOUSDT","SANDUSDT","MANAUSDT","ICPUSDT","FILUSDT"
+      "BTC-USDT","ETH-USDT","BNB-USDT","SOL-USDT","XRP-USDT",
+      "DOGE-USDT","ADA-USDT","TRX-USDT","AVAX-USDT","DOT-USDT",
+      "LTC-USDT","LINK-USDT","ATOM-USDT","FIL-USDT","BCH-USDT",
+      "MATIC-USDT","TON-USDT","ICP-USDT","APT-USDT","NEAR-USDT",
+      "SAND-USDT","MANA-USDT","ARB-USDT","OP-USDT","SUI-USDT"
     ];
 
-    const reqs = symbols.map(async (s) => {
+    const reqs = symbols.map(async (inst) => {
       try {
-        const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`);
-        const d = await r.json();
-
-        // 如果返回错误对象，跳过
-        if (!d || !d.symbol || !d.lastPrice || !d.priceChangePercent) {
-          console.log("⚠ Binance 返回无效数据:", s, d);
+        const r = await fetch(
+          `https://www.okx.com/api/v5/market/ticker?instId=${inst}`
+        );
+        const j = await r.json();
+        const d = j.data?.[0];
+        if (!d) {
+          console.log("⚠ OKX 空数据:", inst, j);
           return null;
         }
 
-        const sym = d.symbol.replace("USDT", "");
+        const sym = inst.replace("-USDT", "");
+
+        const open = parseFloat(d.open24h);
+        const last = parseFloat(d.last);
+        const change = ((last - open) / open) * 100;
 
         return {
           symbol: sym,
-          price: parseFloat(d.lastPrice).toFixed(4),
-          change: parseFloat(d.priceChangePercent).toFixed(2),
+          price: last.toFixed(4),
+          change: change.toFixed(2),
           logo: `/images/coins/${sym}.png`,
         };
       } catch (e) {
-        console.log("⚠ 单个币种失败:", s, e.message);
+        console.log("⚠ 单个 OKX 失败:", inst, e.message);
         return null;
       }
     });
 
-    const results = await Promise.all(reqs);
-
-    // 过滤掉 null，保证返回的都是正常数据
-    res.json(results.filter(Boolean));
+    const data = await Promise.all(reqs);
+    res.json(data.filter(Boolean)); // 只返回成功的币
 
   } catch (err) {
-    console.error("Binance fetch error:", err);
-    res.status(500).json({ error: "Binance fetch error" });
+    console.error("OKX fetch error:", err);
+    res.status(500).json({ error: "fetch failed" });
   }
 });
+
 
 
 
