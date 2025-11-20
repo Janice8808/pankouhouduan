@@ -1,10 +1,10 @@
 // ========== 基础依赖 ==========
-const fetch = require("node-fetch");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 const WebSocket = require("ws");
+
 
 dotenv.config();
 
@@ -439,7 +439,6 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
 });
 
 
-// ========== 币安 实时行情接口 ==========
 app.get("/api/coins", async (req, res) => {
   try {
     const symbols = [
@@ -450,19 +449,35 @@ app.get("/api/coins", async (req, res) => {
       "ALGOUSDT","SANDUSDT","MANAUSDT","ICPUSDT","FILUSDT"
     ];
 
-    const reqs = symbols.map(s =>
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`)
-        .then(r => r.json())
-        .then(d => ({
-          symbol: d.symbol.replace("USDT", ""),
+    const reqs = symbols.map(async (s) => {
+      try {
+        const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`);
+        const d = await r.json();
+
+        // 如果返回错误对象，跳过
+        if (!d || !d.symbol || !d.lastPrice || !d.priceChangePercent) {
+          console.log("⚠ Binance 返回无效数据:", s, d);
+          return null;
+        }
+
+        const sym = d.symbol.replace("USDT", "");
+
+        return {
+          symbol: sym,
           price: parseFloat(d.lastPrice).toFixed(4),
           change: parseFloat(d.priceChangePercent).toFixed(2),
-          logo: `/images/coins/${d.symbol.replace("USDT", "")}.png`,
-        }))
-    );
+          logo: `/images/coins/${sym}.png`,
+        };
+      } catch (e) {
+        console.log("⚠ 单个币种失败:", s, e.message);
+        return null;
+      }
+    });
 
-    const data = await Promise.all(reqs);
-    res.json(data);
+    const results = await Promise.all(reqs);
+
+    // 过滤掉 null，保证返回的都是正常数据
+    res.json(results.filter(Boolean));
 
   } catch (err) {
     console.error("Binance fetch error:", err);
