@@ -439,46 +439,37 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
 });
 
 
-// ========== OKX 实时行情接口 ==========
+// ========== 币安 实时行情接口 ==========
 app.get("/api/coins", async (req, res) => {
   try {
     const symbols = [
-      "BTC-USDT","ETH-USDT","BNB-USDT","SOL-USDT","XRP-USDT",
-      "DOGE-USDT","ADA-USDT","TRX-USDT","AVAX-USDT","DOT-USDT",
-      "LTC-USDT","UNI-USDT","LINK-USDT","ATOM-USDT","ETC-USDT",
-      "XMR-USDT","TON-USDT","APT-USDT","NEAR-USDT","FTM-USDT",
-      "ALGO-USDT","SAND-USDT","MANA-USDT","ICP-USDT","FIL-USDT"
+      "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+      "DOGEUSDT","ADAUSDT","TRXUSDT","AVAXUSDT","DOTUSDT",
+      "LTCUSDT","UNIUSDT","LINKUSDT","ATOMUSDT","ETCUSDT",
+      "XMRUSDT","TONUSDT","APTUSDT","NEARUSDT","FTMUSDT",
+      "ALGOUSDT","SANDUSDT","MANAUSDT","ICPUSDT","FILUSDT"
     ];
 
-    const reqs = symbols.map(inst =>
-      fetch(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`)
+    const reqs = symbols.map(s =>
+      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${s}`)
         .then(r => r.json())
-        .then(data => {
-          const d = data.data?.[0];
-          if (!d) return null;
-
-          const sym = inst.replace("-USDT", "");
-
-          const changePercent =
-            ((parseFloat(d.last) - parseFloat(d.open24h)) / parseFloat(d.open24h)) * 100;
-
-          return {
-            symbol: sym,
-            price: parseFloat(d.last).toFixed(4),
-            change: changePercent.toFixed(2),
-            logo: `/images/coins/${sym}.png`
-          };
-        })
+        .then(d => ({
+          symbol: d.symbol.replace("USDT", ""),
+          price: parseFloat(d.lastPrice).toFixed(4),
+          change: parseFloat(d.priceChangePercent).toFixed(2),
+          logo: `/images/coins/${d.symbol.replace("USDT", "")}.png`,
+        }))
     );
 
-    const results = await Promise.all(reqs);
-    res.json(results.filter(Boolean));
+    const data = await Promise.all(reqs);
+    res.json(data);
 
   } catch (err) {
-    console.error("OKX fetch error:", err);
-    res.status(500).json({ error: "fetch failed" });
+    console.error("Binance fetch error:", err);
+    res.status(500).json({ error: "Binance fetch error" });
   }
 });
+
 
 
 // ========== K线数据 ==========
