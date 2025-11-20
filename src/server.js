@@ -115,17 +115,46 @@ app.post("/api/auth/verify", (req, res) => {
   res.json({ token, userId: user.addressLabel, address });
 });
 
-// ========== 用户接口 ==========
-app.get("/api/user/balance", authMiddleware, (req, res) => {
-  const { address } = req.user;
-  const user = createUserIfNotExists(address);
+// ========== 用户余额（允许游客访问） ==========
+app.get("/api/user/balance", (req, res) => {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
 
-res.json({
-  userId: user.addressLabel,   // ⭐ UID
-  wallet: user.wallet,
-  balances: user.balances,
+  // 没 token = 游客模式 → 返回默认余额
+  if (!token) {
+    return res.json({
+      userId: "0",
+      wallet: "guest",
+      balances: {
+        USDT: 0,
+        BTC: 0,
+      },
+    });
+  }
+
+  // -------- 有 token 的正常逻辑 --------
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = createUserIfNotExists(payload.address);
+
+    return res.json({
+      userId: user.addressLabel,
+      wallet: user.wallet,
+      balances: user.balances,
+    });
+  } catch (err) {
+    // token 错误也按游客处理，避免报错
+    return res.json({
+      userId: "0",
+      wallet: "guest",
+      balances: {
+        USDT: 0,
+        BTC: 0,
+      },
+    });
+  }
 });
-});
+
 
 // ⭐ 用户信息（给 AuthContext 用）
 app.get("/api/userinfo", authMiddleware, (req, res) => {
