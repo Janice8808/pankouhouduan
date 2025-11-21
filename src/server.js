@@ -772,6 +772,36 @@ app.get("/api/notice/unread", authMiddleware, async (req, res) => {
   res.json({ unread: Number(r.rows[0].count) });
 });
 
+
+app.post("/admin/notice/send", async (req, res) => {
+  try {
+    const { address, title, content } = req.body;
+
+    if (!address) return res.status(400).json({ message: "缺少用户地址" });
+
+    const now = Date.now();
+
+    await pool.query(
+      `INSERT INTO notifications(user_address, title, content, unread, created_at)
+       VALUES($1, $2, $3, true, $4)`,
+      [address, title || "", content || "", now]
+    );
+
+    // ⭐ 给当前用户实时推送（如果在线）
+    broadcastToUser(address, {
+      type: "NEW_NOTICE",
+      title,
+      content,
+      createdAt: now
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "发送通知失败" });
+  }
+});
+
 // =========================================================
 //  管理员系统
 // =========================================================
