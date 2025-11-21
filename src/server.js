@@ -703,36 +703,32 @@ app.post("/admin/login", (req, res) => {
 });
 
 app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
-  // ⭐ 按 UID（address_label）倒序排序 —— 转数字排序
-  const r = await pool.query(
-    "SELECT * FROM users ORDER BY address_label::bigint DESC"
-  );
+  // ⭐ 按 UID 数字排序，非数字排最后，不崩溃
+  const r = await pool.query(`
+    SELECT * FROM users 
+    ORDER BY 
+      CASE 
+        WHEN address_label ~ '^[0-9]+$' THEN address_label::bigint
+        ELSE 0
+      END DESC
+  `);
 
   const rows = r.rows;
 
   const users = await Promise.all(
     rows.map(async (u) => {
-      // ⭐ 根据 IP 获取地理位置
       const location = await ipToLocation(u.register_ip || u.last_login_ip);
 
       return {
-        userId: u.address_label,      // UID（如 200120）
-        wallet: u.address,            // 用户钱包地址
-        remark: u.remark,             // 备注
-
-        // ===== 登录信息 =====
+        userId: u.address_label,
+        wallet: u.address,
+        remark: u.remark,
         loginCount: u.login_count,
         lastLogin: u.last_login,
         lastSeen: u.last_seen,
-
-        // ===== 注册信息 =====
         registerIp: u.register_ip,
         createdAt: u.created_at,
-
-        // ===== 解析出来的位置（如：中国/广州）=====
         addressLabel: location,
-
-        // ===== 其他 =====
         verifyStatus: u.verify_status,
         controlMode: u.control_mode,
         balances: u.balances || {},
