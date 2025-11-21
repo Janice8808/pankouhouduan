@@ -4,10 +4,11 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 const WebSocket = require("ws");
-
+const pool = require("./db"); // PostgreSQL 连接池
 
 dotenv.config();
 
+// Express 初始化
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -16,17 +17,12 @@ app.use(express.json());
 const priceRouter = require("./routes/price");
 app.use("/api/prices", priceRouter);
 
-
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 
-// ========== 内存数据库 ==========
-const users = new Map();
-const nonces = new Map();
-const withdraws = new Map();
-const orders = new Map();  
 
+// ========== 工具函数：生成随机地址 ==========
 function generateFakeEthAddress() {
   const hex = [...Array(40)]
     .map(() => Math.floor(Math.random() * 16).toString(16))
@@ -34,75 +30,53 @@ function generateFakeEthAddress() {
   return "0x" + hex;
 }
 
-// UID 从 200101 开始
-let nextUID = 200101;
-// ========== 游客账号登录（自动创建） ==========
-app.post("/api/guest-login", (req, res) => {
+// =========================================================
+//  PostgreSQL: createUserIfNotExists
+// =========================================================
+async function createUserIfNotExists(address) {
+  const addr = address.toLowerCase();
 
-  // 创建一个随机的 ETH 钱包地址
-  const guestAddress = generateFakeEthAddress();
+  // 1. 查询用户是否存在
+  const result = await pool.query(
+    "SELECT * FROM users WHERE address = $1",
+    [addr]
+  );
 
-  // 使用已有 createUserIfNotExists 来创建用户
-  const user = createUserIfNotExists(guestAddress);
-
-  user.loginCount++;
-  user.lastLogin = Date.now();
-
-  // 生成 token
-  const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
-    expiresIn: "7d",
-  });
-
-  res.json({
-    data: {
-      userId: user.addressLabel,
-      token,
-      address: guestAddress,
-      isGuest: true
-    }
-  });
-});
-
-
-// ========== 用户创建逻辑 ==========
-function createUserIfNotExists(address) {
-  let user = users.get(address);
-  if (!user) {
-    user = {
-      wallet: address,
-      addressLabel: String(nextUID++),
-
-      remark: "",
-      controlMode: "normal",
-
-      balances: {
-        USDT: 1000,
-        BTC: 0,
-      },
-
-      loginCount: 0,
-      lastLogin: 0,
-      registerIp: "",
-      lastLoginIp: "",
-      createdAt: Date.now(),
-
-      verifyStatus: "success",
-    };
-
-    users.set(address, user);
+  if (result.rows.length > 0) {
+    return result.rows[0];
   }
-  return user;
+
+  // 2. 不存在 → 创建
+  const addressLabel = "U" + Date.now().toString().slice(-6);
+
+  const insert = await pool.query(
+    `INSERT INTO users 
+     (address, address_label, balances, created_at, verify_status)
+     VALUES ($1, $2, $3, $4, 'success')
+     RETURNING *`,
+    [
+      addr,
+      addressLabel,
+      JSON.stringify({ USDT: 1000, BTC: 0 }),
+      Date.now()
+    ]
+  );
+
+  return insert.rows[0];
 }
 
-// ========== Token 中间件 ==========
+
+// =========================================================
+//  Token 中间件
+// =========================================================
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+
   if (!token) return res.status(401).json({ message: "缺少 token" });
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload; 
+    req.user = jwt.verify(token, JWT_SECRET);
   } catch {
     return res.status(401).json({ message: "token 无效" });
   }
@@ -113,6 +87,7 @@ function authMiddleware(req, res, next) {
 function adminAuthMiddleware(req, res, next) {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+
   if (!token) return res.status(401).json({ message: "缺少 adminToken" });
 
   try {
@@ -126,369 +101,503 @@ function adminAuthMiddleware(req, res, next) {
   next();
 }
 
-// ========== Auth 接口 ==========
-app.post("/api/auth/nonce", (req, res) => {
-  const { address } = req.body || {};
-  if (!address) return res.status(400).json({ message: "缺少 address" });
 
-  const nonce = Math.floor(Math.random() * 1e9).toString();
-  nonces.set(address.toLowerCase(), nonce);
-
-  res.json({ address, nonce });
-});
-
-app.post("/api/auth/verify", (req, res) => {
-  const { address, signature } = req.body || {};
-  if (!address || !signature)
-    return res.status(400).json({ message: "缺少 address / signature" });
-
-  const user = createUserIfNotExists(address);
-
-  user.loginCount++;
-  user.lastLogin = Date.now();
-  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
-  if (!user.registerIp) user.registerIp = ip;
-  user.lastLoginIp = ip;
-
-  const token = jwt.sign({ address }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, userId: user.addressLabel, address });
-});
-
-// ========== 用户余额 ==========
-app.get("/api/user/balance", (req, res) => {
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-
-  if (!token) {
-    return res.json({
-      userId: "0",
-      wallet: "guest",
-      balances: { USDT: 0, BTC: 0 },
-    });
-  }
-
+// =========================================================
+//  PostgreSQL 版 NONCE
+// =========================================================
+app.post("/api/auth/nonce", async (req, res) => {
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const user = createUserIfNotExists(payload.address);
+    const { address } = req.body || {};
+    if (!address) return res.status(400).json({ message: "缺少 address" });
 
-    return res.json({
-      userId: user.addressLabel,
-      wallet: user.wallet,
+    const nonce = Math.floor(Math.random() * 1e9).toString();
+
+    await pool.query(
+      `INSERT INTO nonces (address, nonce)
+       VALUES ($1, $2)
+       ON CONFLICT (address) DO UPDATE SET nonce = $2`,
+      [address.toLowerCase(), nonce]
+    );
+
+    res.json({ address, nonce });
+
+  } catch (err) {
+    console.error("nonce error:", err);
+    res.status(500).json({ message: "获取 nonce 失败" });
+  }
+});
+
+
+// =========================================================
+//  PostgreSQL 版 VERIFY
+// =========================================================
+app.post("/api/auth/verify", async (req, res) => {
+  try {
+    const { address, signature } = req.body || {};
+    if (!address) return res.status(400).json({ message: "缺少 address" });
+
+    const low = address.toLowerCase();
+
+    // 查询 nonce
+    const nonceData = await pool.query(
+      "SELECT nonce FROM nonces WHERE address = $1",
+      [low]
+    );
+
+    if (nonceData.rows.length === 0) {
+      return res.status(400).json({ message: "nonce 不存在，请重新获取" });
+    }
+
+    // 暂不验证 signature（之后可加）
+
+    // 创建 / 获取用户
+    const user = await createUserIfNotExists(low);
+
+    // 更新登录信息
+    const ip =
+      req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress ||
+      "unknown";
+
+    await pool.query(
+      `UPDATE users 
+       SET login_count = login_count + 1,
+           last_login = $1,
+           register_ip = COALESCE(register_ip, $2),
+           last_login_ip = $2
+       WHERE address = $3`,
+      [Date.now(), ip, low]
+    );
+
+    // 生成 token
+    const token = jwt.sign({ address: low }, JWT_SECRET, { expiresIn: "7d" });
+
+    res.json({
+      token,
+      userId: user.address_label,
+      address: low,
+    });
+
+  } catch (err) {
+    console.error("verify error:", err);
+    res.status(500).json({ message: "verify 失败" });
+  }
+});
+
+
+// =========================================================
+//  游客登录
+// =========================================================
+app.post("/api/guest-login", async (req, res) => {
+  try {
+    const guestAddress = generateFakeEthAddress();
+
+    const user = await createUserIfNotExists(guestAddress);
+
+    await pool.query(
+      `UPDATE users SET login_count = login_count + 1, last_login = $1 WHERE address = $2`,
+      [Date.now(), guestAddress]
+    );
+
+    const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.json({
+      data: {
+        userId: user.address_label,
+        token,
+        address: guestAddress,
+        isGuest: true,
+      }
+    });
+
+  } catch (err) {
+    console.error("guest login error:", err);
+    res.status(500).json({ message: "guest login failed" });
+  }
+});
+
+
+// =========================================================
+//  获取余额
+// =========================================================
+app.get("/api/user/balance", async (req, res) => {
+  try {
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+
+    if (!token) {
+      return res.json({ userId: "0", wallet: "guest", balances: { USDT: 0 } });
+    }
+
+    const address = jwt.verify(token, JWT_SECRET).address;
+
+    const r = await pool.query(
+      "SELECT address_label, address, balances FROM users WHERE address = $1",
+      [address]
+    );
+
+    if (r.rows.length === 0) {
+      return res.json({ userId: "0", wallet: "guest", balances: { USDT: 0 } });
+    }
+
+    const user = r.rows[0];
+
+    res.json({
+      userId: user.address_label,
+      wallet: user.address,
       balances: user.balances,
     });
-  } catch {
-    return res.json({
-      userId: "0",
-      wallet: "guest",
-      balances: { USDT: 0, BTC: 0 },
-    });
+
+  } catch (err) {
+    console.error("balance error:", err);
+    res.json({ userId: "0", wallet: "guest", balances: { USDT: 0 } });
   }
 });
 
-// ⭐ 用户信息
-app.get("/api/userinfo", authMiddleware, (req, res) => {
-  const { address } = req.user;
-  const user = createUserIfNotExists(address);
 
-  res.json({
-    userId: user.addressLabel,
-    wallet: user.wallet,
-    remark: user.remark,
-    controlMode: user.controlMode,
-    balances: user.balances,
-    loginCount: user.loginCount,
-    lastLogin: user.lastLogin,
-    registerIp: user.registerIp,
-    lastLoginIp: user.lastLoginIp,
-    createdAt: user.createdAt,
-    verifyStatus: user.verifyStatus,
-  });
+// =========================================================
+//  获取用户信息
+// =========================================================
+app.get("/api/userinfo", authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE address = $1",
+      [req.user.address]
+    );
+
+    if (result.rows.length === 0)
+      return res.status(404).json({ message: "用户不存在" });
+
+    const u = result.rows[0];
+
+    res.json({
+      userId: u.address_label,
+      wallet: u.address,
+      remark: u.remark,
+      controlMode: u.control_mode,
+      balances: u.balances,
+      loginCount: u.login_count,
+      lastLogin: u.last_login,
+      registerIp: u.register_ip,
+      lastLoginIp: u.last_login_ip,
+      createdAt: u.created_at,
+      verifyStatus: u.verify_status,
+    });
+
+  } catch (err) {
+    console.error("userinfo error:", err);
+    res.status(500).json({ message: "获取用户信息失败" });
+  }
 });
 
-// ====== 用户余额结算 ======
-app.post("/api/user/balance/settle", authMiddleware, (req, res) => {
-  const { amount, isWin, percent, symbol } = req.body || {};
-  const { address } = req.user;
 
-  const user = createUserIfNotExists(address);
-
-  let profit = isWin ? amount * percent : -amount;
-  user.balances[symbol] = (user.balances[symbol] || 0) + profit;
-
-  res.json({
-    success: true,
-    profit,
-    balances: user.balances,
-  });
-});
-
-// ====== 用户提交 Mail ======
-app.post("/api/mail", async (req, res) => {
-  const { email } = req.body || {};
-  if (!email) return res.status(400).json({ error: "Email is required" });
-
-  console.log("📧 New mail submitted:", email);
-  return res.json({ message: "Mail submitted successfully!" });
-});
-
-// ====== 设置语言 ======
-app.post("/api/language", authMiddleware, (req, res) => {
-  const { address } = req.user;
+// =========================================================
+//  设置语言
+// =========================================================
+app.post("/api/language", authMiddleware, async (req, res) => {
   const { language } = req.body || {};
-
   if (!language) return res.status(400).json({ message: "缺少 language" });
 
-  const user = createUserIfNotExists(address);
-  user.language = language;
+  await pool.query(
+    "UPDATE users SET language = $1 WHERE address = $2",
+    [language, req.user.address]
+  );
 
   res.json({ success: true, language });
 });
 
-// ====== 绑定银行卡 ======
-app.post("/api/bankcard", authMiddleware, (req, res) => {
+
+// =========================================================
+//  绑定银行卡
+// =========================================================
+app.post("/api/bankcard", authMiddleware, async (req, res) => {
   const { name, cardNumber, bankName } = req.body || {};
-  const { address } = req.user;
 
   if (!name || !cardNumber || !bankName)
-    return res.status(400).json({ error: "缺少字段 name/cardNumber/bankName" });
+    return res.status(400).json({ message: "缺少字段" });
 
-  const user = createUserIfNotExists(address);
+  await pool.query(
+    `UPDATE users 
+     SET bankcard = $1 
+     WHERE address = $2`,
+    [JSON.stringify({ name, cardNumber, bankName, updatedAt: Date.now() }), req.user.address]
+  );
 
-  user.bankCard = {
-    name,
-    cardNumber,
-    bankName,
-    updatedAt: Date.now(),
-  };
-
-  res.json({
-    success: true,
-    message: "Bank card submitted successfully!",
-    bankCard: user.bankCard,
-  });
+  res.json({ success: true });
 });
 
-// ========== 管理员接口 ==========
+
+// =========================================================
+//  下单
+// =========================================================
+app.post("/api/order/create", authMiddleware, async (req, res) => {
+  try {
+    const { symbol, amount, direction } = req.body;
+    const address = req.user.address;
+
+    const r = await pool.query(
+      "SELECT balances FROM users WHERE address = $1",
+      [address]
+    );
+
+    const balances = r.rows[0].balances;
+
+    if (balances.USDT < amount)
+      return res.status(400).json({ message: "余额不足" });
+
+    balances.USDT -= amount;
+
+    await pool.query(
+      "UPDATE users SET balances=$1 WHERE address=$2",
+      [balances, address]
+    );
+
+    const id = "ord_" + Date.now();
+    const createdAt = Date.now();
+
+    await pool.query(
+      `INSERT INTO orders(id, wallet, symbol, amount, direction, status, profit, created_at)
+       VALUES($1,$2,$3,$4,$5,'open',0,$6)`,
+      [id, address, symbol, amount, direction, createdAt]
+    );
+
+    res.json({
+      success: true,
+      order: { id, wallet: address, symbol, amount, direction, status: "open", createdAt },
+      balances,
+    });
+
+  } catch (err) {
+    console.error("order create error:", err);
+    res.status(500).json({ message: "下单失败" });
+  }
+});
+
+
+// =========================================================
+//  查询订单
+// =========================================================
+app.get("/api/order/list", authMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      "SELECT * FROM orders WHERE wallet = $1 ORDER BY created_at DESC",
+      [req.user.address]
+    );
+
+    res.json(r.rows);
+
+  } catch (err) {
+    console.error("order list error:", err);
+    res.status(500).json({ message: "获取订单列表失败" });
+  }
+});
+
+
+// =========================================================
+//  订单结算
+// =========================================================
+app.post("/api/order/settle", authMiddleware, async (req, res) => {
+  try {
+    const { orderId, isWin, percent } = req.body;
+    const address = req.user.address;
+
+    const orderResult = await pool.query(
+      "SELECT * FROM orders WHERE id=$1",
+      [orderId]
+    );
+
+    if (orderResult.rows.length === 0)
+      return res.status(400).json({ message: "订单不存在" });
+
+    const order = orderResult.rows[0];
+
+    if (order.wallet !== address)
+      return res.status(403).json({ message: "不能操作别人的订单" });
+
+    if (order.status === "closed")
+      return res.status(400).json({ message: "订单已结算" });
+
+    const profit = isWin ? order.amount * percent : -order.amount;
+
+    const userResult = await pool.query(
+      "SELECT balances FROM users WHERE address=$1",
+      [address]
+    );
+
+    const balances = userResult.rows[0].balances;
+
+    balances.USDT += order.amount + profit;
+
+    await pool.query(
+      "UPDATE users SET balances=$1 WHERE address=$2",
+      [balances, address]
+    );
+
+    const closedAt = Date.now();
+
+    await pool.query(
+      `UPDATE orders SET status='closed', profit=$1, closed_at=$2 WHERE id=$3`,
+      [profit, closedAt, orderId]
+    );
+
+    res.json({
+      success: true,
+      order: { ...order, status: "closed", profit, closed_at: closedAt },
+      balances,
+    });
+
+  } catch (err) {
+    console.error("order settle error:", err);
+    res.status(500).json({ message: "订单结算失败" });
+  }
+});
+
+
+// =========================================================
+//  提币
+// =========================================================
+app.post("/api/withdraw/create", authMiddleware, async (req, res) => {
+  try {
+    const { symbol, amount, address: withdrawAddress } = req.body;
+    const wallet = req.user.address;
+
+    const r = await pool.query(
+      "SELECT balances, remark FROM users WHERE address=$1",
+      [wallet]
+    );
+
+    const user = r.rows[0];
+    const balances = user.balances;
+
+    if ((balances[symbol] || 0) < amount)
+      return res.status(400).json({ message: "余额不足" });
+
+    balances[symbol] -= amount;
+
+    await pool.query(
+      "UPDATE users SET balances=$1 WHERE address=$2",
+      [balances, wallet]
+    );
+
+    const wid = "wd_" + Date.now();
+
+    await pool.query(
+      `INSERT INTO withdraws(id, wallet, symbol, amount, withdraw_address, remark, status, created_at)
+       VALUES($1,$2,$3,$4,$5,$6,'pending',$7)`,
+      [wid, wallet, symbol, amount, withdrawAddress, user.remark, Date.now()]
+    );
+
+    res.json({
+      success: true,
+      withdraw: { id: wid, wallet, symbol, amount, withdrawAddress, status: "pending" },
+      balances
+    });
+
+  } catch (err) {
+    console.error("withdraw error:", err);
+    res.status(500).json({ message: "提现失败" });
+  }
+});
+
+
+// =========================================================
+//  查询提现记录
+// =========================================================
+app.get("/api/withdraw/list", authMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      "SELECT * FROM withdraws WHERE wallet=$1 ORDER BY created_at DESC",
+      [req.user.address]
+    );
+
+    res.json(r.rows);
+
+  } catch (err) {
+    console.error("withdraw list error:", err);
+    res.status(500).json({ message: "获取提现列表失败" });
+  }
+});
+
+
+// =========================================================
+//  管理员：审核提现
+// =========================================================
+app.post("/admin/withdraw/approve", adminAuthMiddleware, async (req, res) => {
+  const { id } = req.body;
+  const r = await pool.query(
+    "UPDATE withdraws SET status='approved' WHERE id=$1 RETURNING *",
+    [id]
+  );
+  res.json({ success: true, withdraw: r.rows[0] });
+});
+
+app.post("/admin/withdraw/reject", adminAuthMiddleware, async (req, res) => {
+  const { id, reason } = req.body;
+  const r = await pool.query(
+    "UPDATE withdraws SET status='rejected', reason=$1 WHERE id=$2 RETURNING *",
+    [reason || "管理员拒绝", id]
+  );
+  res.json({ success: true, withdraw: r.rows[0] });
+});
+
+
+// =========================================================
+//  管理员系统
+// =========================================================
 app.post("/admin/login", (req, res) => {
-  const { password } = req.body || {};
+  const { password } = req.body;
   if (password !== ADMIN_PASSWORD)
     return res.status(401).json({ message: "密码错误" });
 
-  const adminToken = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "1d" });
-  res.json({ adminToken });
+  const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "1d" });
+  res.json({ adminToken: token });
 });
 
-app.get("/admin/users", adminAuthMiddleware, (req, res) => {
-  const list = Array.from(users.values()).map((u) => ({
-    userId: u.addressLabel,
-    wallet: u.wallet,
-    remark: u.remark,
-    controlMode: u.controlMode,
-    balances: u.balances,
-    loginCount: u.loginCount,
-    lastLogin: u.lastLogin,
-    registerIp: u.registerIp,
-    lastLoginIp: u.lastLoginIp,
-    createdAt: u.createdAt,
-    verifyStatus: u.verifyStatus,
-  }));
-  res.json(list);
+app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
+  const r = await pool.query("SELECT * FROM users ORDER BY id DESC");
+  res.json(r.rows);
 });
 
-// 管理员查看全部订单
-app.get("/admin/orders", adminAuthMiddleware, (req, res) => {
-  const list = Array.from(orders.values());
-  res.json(list);
+app.get("/admin/orders", adminAuthMiddleware, async (req, res) => {
+  const r = await pool.query("SELECT * FROM orders ORDER BY created_at DESC");
+  res.json(r.rows);
 });
 
-// 管理员加余额
-app.post("/admin/balance/add", adminAuthMiddleware, (req, res) => {
-  const { address, symbol, amount } = req.body || {};
-  if (!address || !symbol || typeof amount !== "number")
-    return res.status(400).json({ message: "缺少字段" });
+app.post("/admin/balance/add", adminAuthMiddleware, async (req, res) => {
+  const { address, symbol, amount } = req.body;
 
-  const user = createUserIfNotExists(address);
-  user.balances[symbol] = (user.balances[symbol] || 0) + amount;
-
-  res.json({ success: true, balances: user.balances });
-});
-
-// 用户风控设置
-app.post("/admin/user/control", adminAuthMiddleware, (req, res) => {
-  const { address, mode, remark } = req.body || {};
-  const user = createUserIfNotExists(address);
-
-  if (mode) user.controlMode = mode;
-  if (remark !== undefined) user.remark = remark;
-
-  res.json({ success: true, controlMode: user.controlMode, remark: user.remark });
-});
-
-// ========== 订单系统 ==========
-// 下单接口
-app.post("/api/order/create", authMiddleware, (req, res) => {
-  const { symbol, amount, direction } = req.body || {}; 
-  const { address } = req.user;
-
-  if (!symbol || !amount || !direction) {
-    return res
-      .status(400)
-      .json({ message: "缺少字段 symbol/amount/direction" });
-  }
-
-  const user = createUserIfNotExists(address);
-
-  if (user.balances.USDT < amount) {
-    return res.status(400).json({ message: "余额不足" });
-  }
-
-  user.balances.USDT -= amount;
-
-  const order = {
-    id: "ord_" + Date.now(),
-    wallet: user.wallet,
-    symbol,
-    amount,
-    direction,
-    status: "open",
-    profit: 0,
-    createdAt: Date.now(),
-  };
-
-  orders.set(order.id, order);
-
-  broadcastToAdmins({
-    type: "NEW_ORDER",
-    order,
-  });
-
-  res.json({
-    success: true,
-    order,
-    balances: user.balances,
-  });
-});
-
-// 用户订单列表
-app.get("/api/order/list", authMiddleware, (req, res) => {
-  const { address } = req.user;
-  const user = createUserIfNotExists(address);
-
-  const list = Array.from(orders.values()).filter(
-    (o) => o.wallet === user.wallet
+  const r = await pool.query(
+    "SELECT balances FROM users WHERE address=$1",
+    [address]
   );
 
-  res.json(list);
-});
+  if (r.rows.length === 0)
+    return res.status(400).json({ message: "用户不存在" });
 
-// 订单结算
-app.post("/api/order/settle", authMiddleware, (req, res) => {
-  const { orderId, isWin, percent } = req.body || {};
-  const { address } = req.user;
+  const balances = r.rows[0].balances;
+  balances[symbol] = (balances[symbol] || 0) + amount;
 
-  if (!orderId || typeof isWin === "undefined" || typeof percent === "undefined") {
-    return res
-      .status(400)
-      .json({ message: "缺少字段 orderId / isWin / percent" });
-  }
-
-  const user = createUserIfNotExists(address);
-  const order = orders.get(orderId);
-
-  if (!order) return res.status(400).json({ message: "订单不存在" });
-  if (order.wallet !== user.wallet) return res.status(403).json({ message: "不能操作别人的订单" });
-  if (order.status === "closed") return res.status(400).json({ message: "订单已结算" });
-
-  const profit = isWin ? order.amount * percent : -order.amount;
-  user.balances.USDT += order.amount + profit;
-
-  order.status = "closed";
-  order.closedAt = Date.now();
-  order.profit = profit;
-
-  res.json({
-    success: true,
-    order,
-    balances: user.balances,
-  });
-});
-
-// ========== 提币系统 ==========
-app.post("/api/withdraw/create", authMiddleware, (req, res) => {
-  const { symbol, amount, address: withdrawAddress } = req.body || {};
-  const { address } = req.user;
-
-  const user = createUserIfNotExists(address);
-
-  const wd = {
-    id: "wd_" + Date.now(),
-    wallet: user.wallet,
-    symbol,
-    amount,
-    withdrawAddress,
-    remark: user.remark || "",
-    status: "pending",
-    createdAt: Date.now(),
-  };
-
-  withdraws.set(wd.id, wd);
-
-  broadcastToAdmins({
-    type: "NEW_WITHDRAW",
-    withdraw: wd,
-  });
-
-  res.json({ success: true, withdraw: wd });
-});
-
-app.get("/api/withdraw/list", authMiddleware, (req, res) => {
-  const { address } = req.user;
-
-  const list = Array.from(withdraws.values()).filter(
-    (w) => w.wallet === address
+  await pool.query(
+    "UPDATE users SET balances=$1 WHERE address=$2",
+    [balances, address]
   );
 
-  res.json(list);
+  res.json({ success: true, balances });
 });
 
-app.post("/admin/withdraw/approve", adminAuthMiddleware, (req, res) => {
-  const { id } = req.body || {};
-  if (!withdraws.has(id)) return res.status(400).json({ message: "不存在" });
 
-  const wd = withdraws.get(id);
-  wd.status = "approved";
-
-  res.json({ success: true, withdraw: wd });
-});
-
-app.post("/admin/withdraw/reject", adminAuthMiddleware, (req, res) => {
-  const { id, reason } = req.body || {};
-  if (!withdraws.has(id)) return res.status(400).json({ message: "不存在" });
-
-  const wd = withdraws.get(id);
-  wd.status = "rejected";
-  wd.reason = reason || "管理员拒绝";
-
-  res.json({ success: true, withdraw: wd });
-});
-
-// ========== OKX 实时行情接口 ==========
-// ======================
-//   行情缓存（全局变量）
-// ======================
+// =========================================================
+//  行情与 K线
+// =========================================================
 let cachedCoins = null;
 let lastFetchTime = 0;
 
-// ======================
-//   优化后的行情接口
-// ======================
 app.get("/api/coins", async (req, res) => {
   const now = Date.now();
-
-  // ① 3 秒内重复访问 → 直接返回缓存（50~100ms）
-  if (cachedCoins && now - lastFetchTime < 3000) {
+  if (cachedCoins && now - lastFetchTime < 3000)
     return res.json(cachedCoins);
-  }
 
   try {
     const symbols = [
@@ -499,8 +608,7 @@ app.get("/api/coins", async (req, res) => {
       "SAND-USDT","MANA-USDT","ARB-USDT","OP-USDT","SUI-USDT"
     ];
 
-    // ② 并行发起所有 OKX 请求（Promise.all）
-    const reqs = symbols.map(async (inst) => {
+    const reqs = symbols.map(async inst => {
       try {
         const r = await fetch(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`);
         const j = await r.json();
@@ -523,10 +631,8 @@ app.get("/api/coins", async (req, res) => {
       }
     });
 
-    // ③ 等待所有请求并过滤空数据
     const coins = (await Promise.all(reqs)).filter(Boolean);
 
-    // ④ 写入缓存
     cachedCoins = coins;
     lastFetchTime = now;
 
@@ -538,29 +644,29 @@ app.get("/api/coins", async (req, res) => {
   }
 });
 
-
-
-// ========== K线数据 ==========
 app.get("/api/kline", async (req, res) => {
   const { symbol = "BTCUSDT", interval = "1m", limit = 200 } = req.query;
 
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-
   try {
-    const r = await fetch(url);
-    const data = await r.json();
-    res.json(data);
+    const r = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+    );
+    res.json(await r.json());
   } catch {
     res.status(500).json({ message: "kline error" });
   }
 });
 
-// ========== WebSocket（仅后台通知用） ==========
+
+// =========================================================
+//  WebSocket（后台通知）
+// =========================================================
 const server = app.listen(PORT, () => {
-  console.log(`Backend running: http://localhost:${PORT}`);
+  console.log(`Backend running on http://localhost:${PORT}`);
 });
 
 const wsServer = new WebSocket.Server({ noServer: true });
+const adminClients = new Set();
 
 server.on("upgrade", (req, socket, head) => {
   if (req.url === "/admin-ws") {
@@ -572,8 +678,6 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
   }
 });
-
-const adminClients = new Set();
 
 wsServer.on("connection", (ws) => {
   if (ws.path === "admin") {
