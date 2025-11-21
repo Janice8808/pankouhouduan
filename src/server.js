@@ -1,3 +1,32 @@
+async function createUserIfNotExists(address) {
+  const lower = address.toLowerCase();
+
+  // 1. 查用户
+  const result = await pool.query(
+    "SELECT * FROM users WHERE address = $1",
+    [lower]
+  );
+
+  // 2. 已存在 → 直接返回
+  if (result.rows.length > 0) return result.rows[0];
+
+  // 3. 新用户 → 创建
+  const addressLabel = "U" + Date.now().toString().slice(-6);
+
+  const insert = await pool.query(
+    `INSERT INTO users (address, address_label, balances, created_at)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [
+      lower,
+      addressLabel,
+      { USDT: 0, BTC: 0 },   // 初始余额
+      Date.now()
+    ]
+  );
+
+  return insert.rows[0];
+}
 // ========== 基础依赖 ==========
 const express = require("express");
 const cors = require("cors");
