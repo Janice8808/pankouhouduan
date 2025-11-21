@@ -773,34 +773,37 @@ app.get("/api/notice/unread", authMiddleware, async (req, res) => {
 });
 
 
-app.post("/admin/notice/send", async (req, res) => {
-  try {
-    const { address, title, content } = req.body;
+app.post("/admin/notice/send",
+  adminAuthMiddleware,
+  async (req, res) => {
+    try {
+      const { address, title, content } = req.body;
 
-    if (!address) return res.status(400).json({ message: "缺少用户地址" });
+      if (!address) return res.status(400).json({ message: "缺少用户地址" });
 
-    const now = Date.now();
+      const now = Date.now();
 
-    await pool.query(
-      `INSERT INTO notifications(user_address, title, content, unread, created_at)
-       VALUES($1, $2, $3, true, $4)`,
-      [address, title || "", content || "", now]
-    );
+      await pool.query(
+        `INSERT INTO notifications(user_address, title, content, unread, created_at)
+         VALUES($1, $2, $3, true, $4)`,
+        [address.toLowerCase(), title || "", content || "", now]
+      );
 
-    // ⭐ 给当前用户实时推送（如果在线）
-    broadcastToUser(address, {
-      type: "NEW_NOTICE",
-      title,
-      content,
-      createdAt: now
-    });
+      broadcastToUser(address, {
+        type: "NEW_NOTICE",
+        title,
+        content,
+        createdAt: now,
+      });
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "发送通知失败" });
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "发送通知失败" });
+    }
   }
-});
+);
+
 
 // =========================================================
 //  管理员系统
@@ -963,15 +966,21 @@ const wsServer = new WebSocket.Server({ noServer: true });
 const adminClients = new Set();
 
 server.on("upgrade", (req, socket, head) => {
-  if (req.url === "/admin-ws") {
+  if (req.url.startsWith("/admin-ws")) {
     wsServer.handleUpgrade(req, socket, head, (ws) => {
       ws.path = "admin";
+      wsServer.emit("connection", ws, req);
+    });
+  } else if (req.url.startsWith("/user-ws")) {
+    wsServer.handleUpgrade(req, socket, head, (ws) => {
+      ws.path = "user";
       wsServer.emit("connection", ws, req);
     });
   } else {
     socket.destroy();
   }
 });
+
 // 若 Node 版本 >= 18，不需要额外安装 fetch。
 // 若你 Node < 18，需要：npm i node-fetch，再解除下面注释：
 // const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
@@ -1000,11 +1009,36 @@ async function ipToLocation(ip) {
   return "未知";
 }
 
+const userClients = new Map(); // address -> ws
+
 wsServer.on("connection", (ws) => {
   if (ws.path === "admin") {
     adminClients.add(ws);
     console.log("Admin WS connected");
     ws.on("close", () => adminClients.delete(ws));
+  }
+
+  if (ws.path === "user") {
+    console.log("User WS connected");
+
+    ws.on("message", (msg) => {
+      let data;
+      try {
+        data = JSON.parse(msg);
+      } catch {
+        return;
+      }
+
+      if (data.type === "AUTH" && data.token) {
+        const payload = jwt.verify(data.token, JWT_SECRET);
+        const address = payload.address.toLowerCase();
+
+        userClients.set(address, ws);
+        console.log("User authenticated:", address);
+
+        ws.on("close", () => userClients.delete(address));
+      }
+    });
   }
 });
 
@@ -1014,4 +1048,10 @@ function broadcastToAdmins(data) {
   adminClients.forEach((c) => {
     if (c.readyState === WebSocket.OPEN) c.send(msg);
   });
+}
+function broadcastToUser(address, msg) {
+  const ws = userClients.get(address.toLowerCase());
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  }
 }
