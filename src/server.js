@@ -34,6 +34,9 @@ function generateFakeEthAddress() {
 // =========================================================
 //  PostgreSQL: createUserIfNotExists
 // =========================================================
+// =========================================================
+//  PostgreSQL: createUserIfNotExists（固定 UID 递增版）
+// =========================================================
 async function createUserIfNotExists(address) {
   const addr = address.toLowerCase();
 
@@ -44,27 +47,48 @@ async function createUserIfNotExists(address) {
   );
 
   if (result.rows.length > 0) {
-    return result.rows[0];
+    let user = result.rows[0];
+
+    // ⭐ 如果 address_label 为空 → 补 UID
+    if (!user.address_label) {
+      const uid = 200100 + (user.id - 1);
+      await pool.query(
+        "UPDATE users SET address_label=$1 WHERE id=$2",
+        [uid.toString(), user.id]
+      );
+      user.address_label = uid.toString();
+    }
+
+    return user;
   }
 
-  // 2. 不存在 → 创建
-  const addressLabel = "U" + Date.now().toString().slice(-6);
-
+  // 2. 如果不存在 → 创建用户
   const insert = await pool.query(
-    `INSERT INTO users 
-     (address, address_label, balances, created_at, verify_status)
-     VALUES ($1, $2, $3, $4, 'success')
+    `INSERT INTO users (address, balances, created_at, verify_status)
+     VALUES ($1, $2, $3, 'success')
      RETURNING *`,
     [
       addr,
-      addressLabel,
       JSON.stringify({ USDT: 1000, BTC: 0 }),
       Date.now()
     ]
   );
 
-  return insert.rows[0];
+  const user = insert.rows[0];
+
+  // ⭐ 生成 UID：从 200100 开始递增
+  const uid = 200100 + (user.id - 1);
+
+  await pool.query(
+    "UPDATE users SET address_label=$1 WHERE id=$2",
+    [uid.toString(), user.id]
+  );
+
+  user.address_label = uid.toString();
+
+  return user;
 }
+
 
 
 // =========================================================
@@ -428,18 +452,28 @@ app.post("/api/order/create", authMiddleware, async (req, res) => {
       [id, address, symbol, amount, direction, createdAt]
     );
 
-    // ⭐⭐ NEW — 推送后台提醒
-    broadcastToAdmins({
-      type: "NEW_ORDER",
-      order: {
-        id,
-        wallet: address,
-        symbol,
-        amount,
-        direction,
-        createdAt,
-      }
-    });
+  // ⭐ 获取用户备注（因为上面的查询不包含 remark 字段）
+const remarkResult = await pool.query(
+  "SELECT remark FROM users WHERE address=$1",
+  [address]
+);
+
+const userRemark = remarkResult.rows?.[0]?.remark || "";
+
+// ⭐ 推送后台
+broadcastToAdmins({
+  type: "NEW_ORDER",
+  order: {
+    id,
+    wallet: address,
+    symbol,
+    amount,
+    direction,
+    createdAt,
+    remark: userRemark,
+  }
+});
+
 
     res.json({
       success: true,
@@ -669,39 +703,40 @@ app.post("/admin/login", (req, res) => {
 });
 
 app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
-  const r = await pool.query("SELECT * FROM users ORDER BY id DESC");
+  // ⭐ 按 UID（address_label）倒序排序 —— 转数字排序
+  const r = await pool.query(
+    "SELECT * FROM users ORDER BY address_label::bigint DESC"
+  );
+
   const rows = r.rows;
 
   const users = await Promise.all(
     rows.map(async (u) => {
-      // ⭐ 根据 IP 获取位置
+      // ⭐ 根据 IP 获取地理位置
       const location = await ipToLocation(u.register_ip || u.last_login_ip);
 
-return {
-  userId: u.address_label,      // ID：如 U556622
-  wallet: u.address,            // 账号（钱包地址）
-  remark: u.remark,             // 备注
+      return {
+        userId: u.address_label,      // UID（如 200120）
+        wallet: u.address,            // 用户钱包地址
+        remark: u.remark,             // 备注
 
-  // ===== 登录信息 =====
-  loginCount: u.login_count,    // 登录次数
-  lastLogin: u.last_login,      // 登录时间（毫秒）
+        // ===== 登录信息 =====
+        loginCount: u.login_count,
+        lastLogin: u.last_login,
+        lastSeen: u.last_seen,
 
-  // ⭐⭐⭐ 新增：最后访问时间（刷新页面自动更新）
-  lastSeen: u.last_seen,
+        // ===== 注册信息 =====
+        registerIp: u.register_ip,
+        createdAt: u.created_at,
 
-  // ===== 注册信息 =====
-  registerIp: u.register_ip,    // 注册时 IP
-  createdAt: u.created_at,      // 注册时时间（毫秒）
+        // ===== 解析出来的位置（如：中国/广州）=====
+        addressLabel: location,
 
-  // ===== 地址（解析 IP 得来）=====
-  addressLabel: location,       // 例如：美国/纽约
-
-  // ===== 其他 =====
-  verifyStatus: u.verify_status,
-  controlMode: u.control_mode,
-  balances: u.balances || {},
-};
-
+        // ===== 其他 =====
+        verifyStatus: u.verify_status,
+        controlMode: u.control_mode,
+        balances: u.balances || {},
+      };
     })
   );
 
