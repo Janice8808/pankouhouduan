@@ -190,20 +190,29 @@ app.post("/api/auth/verify", async (req, res) => {
 // =========================================================
 //  游客登录
 // =========================================================
+// =========================================================
+//  游客登录（固定设备账号，不再变化）
+// =========================================================
 app.post("/api/guest-login", async (req, res) => {
   try {
-    const guestAddress = generateFakeEthAddress();
+    const { address } = req.body || {};
+
+    if (!address) {
+      return res.status(400).json({ message: "缺少 address" });
+    }
+
+    const guestAddress = address.toLowerCase();
 
     const user = await createUserIfNotExists(guestAddress);
 
-    // ⭐ 获取真实 IP
+    // 获取真实 IP
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
       req.headers["x-real-ip"] ||
       req.socket.remoteAddress ||
       "unknown";
 
-    // ⭐ 游客也要记录登录信息（否则后台 IP / 地址永远是 null）
+    // 更新登录信息
     await pool.query(
       `UPDATE users 
        SET login_count = login_count + 1,
@@ -232,6 +241,7 @@ app.post("/api/guest-login", async (req, res) => {
     res.status(500).json({ message: "guest login failed" });
   }
 });
+
 
 // =========================================================
 //  心跳接口：前台每次打开 or 刷新页面都会调用
