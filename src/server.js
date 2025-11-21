@@ -707,6 +707,70 @@ app.post("/admin/withdraw/reject", adminAuthMiddleware, async (req, res) => {
   res.json({ success: true, withdraw: r.rows[0] });
 });
 
+// =========================================================
+//  管理员发送通知给指定用户
+// =========================================================
+app.post("/admin/notify", adminAuthMiddleware, async (req, res) => {
+  const { address, title, content } = req.body;
+
+  if (!address || !content)
+    return res.status(400).json({ message: "缺少字段" });
+
+  await pool.query(
+    `INSERT INTO notifications(user_address, title, content, unread, created_at)
+     VALUES($1,$2,$3,TRUE,$4)`,
+    [address.toLowerCase(), title || "", content, Date.now()]
+  );
+
+  res.json({ success: true });
+});
+
+// =========================================================
+//  用户获取自己的通知列表
+// =========================================================
+app.get("/api/notice/list", authMiddleware, async (req, res) => {
+  const address = req.user.address;
+
+  const r = await pool.query(
+    `SELECT * FROM notifications 
+     WHERE user_address=$1 
+     ORDER BY created_at DESC`,
+    [address]
+  );
+
+  res.json(r.rows);
+});
+
+// =========================================================
+//  用户阅读通知 → 将未读全部标记为已读
+// =========================================================
+app.post("/api/notice/read", authMiddleware, async (req, res) => {
+  const address = req.user.address;
+
+  await pool.query(
+    `UPDATE notifications 
+     SET unread = FALSE 
+     WHERE user_address = $1 AND unread = TRUE`,
+    [address]
+  );
+
+  res.json({ success: true });
+});
+
+// =========================================================
+//  获取用户未读通知数量
+// =========================================================
+app.get("/api/notice/unread", authMiddleware, async (req, res) => {
+  const address = req.user.address;
+
+  const r = await pool.query(
+    `SELECT COUNT(*) FROM notifications 
+     WHERE user_address=$1 AND unread=TRUE`,
+    [address]
+  );
+
+  res.json({ unread: Number(r.rows[0].count) });
+});
 
 // =========================================================
 //  管理员系统
