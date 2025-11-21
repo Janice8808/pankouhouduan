@@ -428,6 +428,19 @@ app.post("/api/order/create", authMiddleware, async (req, res) => {
       [id, address, symbol, amount, direction, createdAt]
     );
 
+    // ⭐⭐ NEW — 推送后台提醒
+    broadcastToAdmins({
+      type: "NEW_ORDER",
+      order: {
+        id,
+        wallet: address,
+        symbol,
+        amount,
+        direction,
+        createdAt,
+      }
+    });
+
     res.json({
       success: true,
       order: { id, wallet: address, symbol, amount, direction, status: "open", createdAt },
@@ -439,6 +452,7 @@ app.post("/api/order/create", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "下单失败" });
   }
 });
+
 
 
 // =========================================================
@@ -506,6 +520,16 @@ app.post("/api/order/settle", authMiddleware, async (req, res) => {
       `UPDATE orders SET status='closed', profit=$1, closed_at=$2 WHERE id=$3`,
       [profit, closedAt, orderId]
     );
+broadcastToAdmins({
+  type: "ORDER_SETTLED",
+  order: {
+    id: orderId,
+    wallet: address,
+    profit,
+    isWin,
+    closedAt,
+  }
+});
 
     res.json({
       success: true,
