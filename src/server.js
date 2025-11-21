@@ -130,7 +130,7 @@ app.post("/api/auth/nonce", async (req, res) => {
 
 
 // =========================================================
-//  PostgreSQL 版 VERIFY
+//  PostgreSQL 版 VERIFY（正常登录）
 // =========================================================
 app.post("/api/auth/verify", async (req, res) => {
   try {
@@ -149,17 +149,17 @@ app.post("/api/auth/verify", async (req, res) => {
       return res.status(400).json({ message: "nonce 不存在，请重新获取" });
     }
 
-    // 暂不验证 signature（之后可加）
-
     // 创建 / 获取用户
     const user = await createUserIfNotExists(low);
 
-    // 更新登录信息
+    // ⭐⭐ 获取真实用户 IP（Render / Cloudflare / Nginx / 本地 都支持）
     const ip =
-      req.headers["x-forwarded-for"] ||
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.headers["x-real-ip"] ||
       req.socket.remoteAddress ||
       "unknown";
 
+    // 更新登录信息
     await pool.query(
       `UPDATE users 
        SET login_count = login_count + 1,
@@ -186,6 +186,7 @@ app.post("/api/auth/verify", async (req, res) => {
 });
 
 
+
 // =========================================================
 //  游客登录
 // =========================================================
@@ -195,9 +196,22 @@ app.post("/api/guest-login", async (req, res) => {
 
     const user = await createUserIfNotExists(guestAddress);
 
+    // ⭐ 获取真实 IP
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.headers["x-real-ip"] ||
+      req.socket.remoteAddress ||
+      "unknown";
+
+    // ⭐ 游客也要记录登录信息（否则后台 IP / 地址永远是 null）
     await pool.query(
-      `UPDATE users SET login_count = login_count + 1, last_login = $1 WHERE address = $2`,
-      [Date.now(), guestAddress]
+      `UPDATE users 
+       SET login_count = login_count + 1,
+           last_login = $1,
+           register_ip = COALESCE(register_ip, $2),
+           last_login_ip = $2
+       WHERE address = $3`,
+      [Date.now(), ip, guestAddress]
     );
 
     const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
@@ -218,6 +232,7 @@ app.post("/api/guest-login", async (req, res) => {
     res.status(500).json({ message: "guest login failed" });
   }
 });
+
 
 
 // =========================================================
