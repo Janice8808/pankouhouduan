@@ -27,13 +27,20 @@ const nonces = new Map();
 const withdraws = new Map();
 const orders = new Map();  
 
+function generateFakeEthAddress() {
+  const hex = [...Array(40)]
+    .map(() => Math.floor(Math.random() * 16).toString(16))
+    .join("");
+  return "0x" + hex;
+}
+
 // UID 从 200101 开始
 let nextUID = 200101;
 // ========== 游客账号登录（自动创建） ==========
 app.post("/api/guest-login", (req, res) => {
 
-  // 创建一个随机 guest 地址（代替钱包地址）
-  const guestAddress = "guest_" + Math.random().toString(36).slice(2);
+  // 创建一个随机的 ETH 钱包地址
+  const guestAddress = generateFakeEthAddress();
 
   // 使用已有 createUserIfNotExists 来创建用户
   const user = createUserIfNotExists(guestAddress);
@@ -41,7 +48,7 @@ app.post("/api/guest-login", (req, res) => {
   user.loginCount++;
   user.lastLogin = Date.now();
 
-  // 生成 token（用 guestAddress 作为 address）
+  // 生成 token
   const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
     expiresIn: "7d",
   });
@@ -55,6 +62,7 @@ app.post("/api/guest-login", (req, res) => {
     }
   });
 });
+
 
 // ========== 用户创建逻辑 ==========
 function createUserIfNotExists(address) {
