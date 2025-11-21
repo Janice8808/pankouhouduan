@@ -338,7 +338,25 @@ app.get("/api/userinfo", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "获取用户信息失败" });
   }
 });
+// =========================================================
+//  控输赢
+// =========================================================
 
+app.post("/admin/user/control", adminAuthMiddleware, async (req, res) => {
+  const { address, mode, remark } = req.body;
+
+  if (!address) return res.status(400).json({ message: "缺少 address" });
+
+  await pool.query(
+    `UPDATE users 
+     SET control_mode = $1, 
+         remark = $2
+     WHERE address = $3`,
+    [mode || 'normal', remark || '', address.toLowerCase()]
+  );
+
+  res.json({ success: true });
+});
 
 // =========================================================
 //  设置语言
@@ -548,6 +566,30 @@ app.post("/api/withdraw/create", authMiddleware, async (req, res) => {
   }
 });
 
+// =========================================================
+//  管理员：减少余额
+// =========================================================
+app.post("/admin/balance/sub", adminAuthMiddleware, async (req, res) => {
+  const { address, symbol, amount } = req.body;
+
+  const r = await pool.query(
+    "SELECT balances FROM users WHERE address=$1",
+    [address]
+  );
+
+  if (r.rows.length === 0)
+    return res.status(400).json({ message: "用户不存在" });
+
+  const balances = r.rows[0].balances;
+  balances[symbol] = (balances[symbol] || 0) - Math.abs(amount);
+
+  await pool.query(
+    "UPDATE users SET balances=$1 WHERE address=$2",
+    [balances, address]
+  );
+
+  res.json({ success: true, balances });
+});
 
 // =========================================================
 //  查询提现记录
