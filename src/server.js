@@ -233,6 +233,27 @@ app.post("/api/guest-login", async (req, res) => {
   }
 });
 
+// =========================================================
+//  心跳接口：前台每次打开 or 刷新页面都会调用
+// =========================================================
+app.post("/api/ping", authMiddleware, async (req, res) => {
+  try {
+    const address = req.user.address;
+
+    await pool.query(
+      `UPDATE users 
+       SET last_seen = $1 
+       WHERE address = $2`,
+      [Date.now(), address]
+    );
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error("ping error:", err);
+    res.status(500).json({ message: "ping failed" });
+  }
+});
 
 
 // =========================================================
