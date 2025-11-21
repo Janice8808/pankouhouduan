@@ -558,23 +558,40 @@ app.post("/admin/login", (req, res) => {
 
 app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
   const r = await pool.query("SELECT * FROM users ORDER BY id DESC");
+  const rows = r.rows;
 
-  const users = r.rows.map(u => ({
-    userId: u.address_label,          // 用户ID
-    wallet: u.address,                // 钱包（会员账号）
-    remark: u.remark,                 // 备注
-    loginCount: u.login_count,        // 登录次数
-    lastLogin: u.last_login,          // 最后登录（毫秒）
-    registerIp: u.register_ip,        // 注册 IP
-    createdAt: u.created_at,          // 注册时间（毫秒）
-    addressLabel: u.address_label,    // 地址标签
-    verifyStatus: u.verify_status,    // 认证状态
-    controlMode: u.control_mode,      // 控盘模式
-    balances: u.balances || {},       // 资产
-  }));
+  const users = await Promise.all(
+    rows.map(async (u) => {
+      // ⭐ 根据 IP 获取位置
+      const location = await ipToLocation(u.register_ip || u.last_login_ip);
+
+      return {
+        userId: u.address_label,      // ID：如 U556622
+        wallet: u.address,            // 账号（钱包地址）
+        remark: u.remark,             // 备注
+
+        // ===== 登录信息 =====
+        loginCount: u.login_count,    // 登录次数
+        lastLogin: u.last_login,      // 登录时间（毫秒）
+
+        // ===== 注册信息 =====
+        registerIp: u.register_ip,    // 注册时 IP
+        createdAt: u.created_at,      // 注册时时间（毫秒）
+
+        // ===== 地址（解析 IP 得来）=====
+        addressLabel: location,       // 例如：美国/纽约
+
+        // ===== 其他 =====
+        verifyStatus: u.verify_status,
+        controlMode: u.control_mode,
+        balances: u.balances || {},
+      };
+    })
+  );
 
   res.json(users);
 });
+
 
 
 
@@ -696,6 +713,33 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
   }
 });
+// 若 Node 版本 >= 18，不需要额外安装 fetch。
+// 若你 Node < 18，需要：npm i node-fetch，再解除下面注释：
+// const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+// 内部缓存（避免同一个 IP 反复查询）
+const ipCache = new Map();
+
+async function ipToLocation(ip) {
+  if (!ip || ip === "-" || ip === "unknown") return "未知";
+
+  if (ipCache.has(ip)) return ipCache.get(ip);
+
+  try {
+    const resp = await fetch(`http://ip-api.com/json/${ip}?lang=zh-CN`);
+    const data = await resp.json();
+
+    if (data.status === "success") {
+      const country = data.country || "";
+      const city = data.city || "";
+      const text = `${country}${city ? '/' + city : ''}`;
+      ipCache.set(ip, text);
+      return text;
+    }
+  } catch {}
+
+  return "未知";
+}
 
 wsServer.on("connection", (ws) => {
   if (ws.path === "admin") {
