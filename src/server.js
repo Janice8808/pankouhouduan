@@ -509,40 +509,54 @@ app.get("/api/order/list", authMiddleware, async (req, res) => {
 
 
 // =========================================================
-//  订单结算
+//  订单结算（全面修复版）
 // =========================================================
 app.post("/api/order/settle", authMiddleware, async (req, res) => {
   try {
     const { orderId, isWin, percent } = req.body;
     const address = req.user.address;
 
+    // ① 获取订单
     const orderResult = await pool.query(
       "SELECT * FROM orders WHERE id=$1",
       [orderId]
     );
-
     if (orderResult.rows.length === 0)
       return res.status(400).json({ message: "订单不存在" });
 
     const order = orderResult.rows[0];
 
+    // ② 校验归属
     if (order.wallet !== address)
       return res.status(403).json({ message: "不能操作别人的订单" });
 
     if (order.status === "closed")
       return res.status(400).json({ message: "订单已结算" });
 
-    const profit = isWin ? order.amount * percent : -order.amount;
+    // ============== ⭐⭐ 全部强制数字化 ⭐⭐ ==============
+    const orderAmount = Number(order.amount) || 0;
+    const pct = Number(percent) || 0;
 
+    // ③ 计算盈利
+    const profit = isWin ? orderAmount * pct : -orderAmount;
+
+    // ④ 获取余额
     const userResult = await pool.query(
       "SELECT balances FROM users WHERE address=$1",
       [address]
     );
-
     const balances = userResult.rows[0].balances;
 
-    balances.USDT += order.amount + profit;
+    // ⭐ 永远强制数字化，并避免 NaN
+    const currentUSDT = Number(balances.USDT) || 0;
 
+    // ⑤ 更新余额（本金 + 盈利）
+    balances.USDT = currentUSDT + orderAmount + profit;
+
+    // ⭐ 防止负数 + NaN
+    if (isNaN(balances.USDT)) balances.USDT = currentUSDT;
+
+    // ⑥ 写回数据库
     await pool.query(
       "UPDATE users SET balances=$1 WHERE address=$2",
       [balances, address]
@@ -550,21 +564,25 @@ app.post("/api/order/settle", authMiddleware, async (req, res) => {
 
     const closedAt = Date.now();
 
+    // ⑦ 更新订单
     await pool.query(
       `UPDATE orders SET status='closed', profit=$1, closed_at=$2 WHERE id=$3`,
       [profit, closedAt, orderId]
     );
-broadcastToAdmins({
-  type: "ORDER_SETTLED",
-  order: {
-    id: orderId,
-    wallet: address,
-    profit,
-    isWin,
-    closedAt,
-  }
-});
 
+    // ⑧ 推送管理员
+    broadcastToAdmins({
+      type: "ORDER_SETTLED",
+      order: {
+        id: orderId,
+        wallet: address,
+        profit,
+        isWin,
+        closedAt,
+      }
+    });
+
+    // ⑨ 返回最终数据
     res.json({
       success: true,
       order: { ...order, status: "closed", profit, closed_at: closedAt },
