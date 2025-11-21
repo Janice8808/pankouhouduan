@@ -560,22 +560,22 @@ app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
   const r = await pool.query("SELECT * FROM users ORDER BY id DESC");
 
   const users = r.rows.map(u => ({
-    userId: u.address_label,         // 映射 ID
-    wallet: u.address,               // 会员账号
-    remark: u.remark,                // 备注
-    loginCount: u.login_count,       // 登录次数
-    lastLogin: u.last_login,         // 最后登录
-    registerIp: u.register_ip,       // 注册IP
-    lastLoginIp: u.last_login_ip,    // 登录IP
-    createdAt: u.created_at,         // 创建时间
-    addressLabel: u.address_label,   // 地址标签
-    verifyStatus: u.verify_status,   // 验证状态
-    controlMode: u.control_mode,     // 控盘模式
-    balances: u.balances || {},      // 资产
+    userId: u.address_label,          // 用户ID
+    wallet: u.address,                // 钱包（会员账号）
+    remark: u.remark,                 // 备注
+    loginCount: u.login_count,        // 登录次数
+    lastLogin: u.last_login,          // 最后登录（毫秒）
+    registerIp: u.register_ip,        // 注册 IP
+    createdAt: u.created_at,          // 注册时间（毫秒）
+    addressLabel: u.address_label,    // 地址标签
+    verifyStatus: u.verify_status,    // 认证状态
+    controlMode: u.control_mode,      // 控盘模式
+    balances: u.balances || {},       // 资产
   }));
 
   res.json(users);
 });
+
 
 
 app.get("/admin/orders", adminAuthMiddleware, async (req, res) => {
