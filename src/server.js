@@ -29,6 +29,32 @@ const orders = new Map();
 
 // UID 从 200101 开始
 let nextUID = 200101;
+// ========== 游客账号登录（自动创建） ==========
+app.post("/api/guest-login", (req, res) => {
+
+  // 创建一个随机 guest 地址（代替钱包地址）
+  const guestAddress = "guest_" + Math.random().toString(36).slice(2);
+
+  // 使用已有 createUserIfNotExists 来创建用户
+  const user = createUserIfNotExists(guestAddress);
+
+  user.loginCount++;
+  user.lastLogin = Date.now();
+
+  // 生成 token（用 guestAddress 作为 address）
+  const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
+    expiresIn: "7d",
+  });
+
+  res.json({
+    data: {
+      userId: user.addressLabel,
+      token,
+      address: guestAddress,
+      isGuest: true
+    }
+  });
+});
 
 // ========== 用户创建逻辑 ==========
 function createUserIfNotExists(address) {
