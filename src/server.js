@@ -601,27 +601,31 @@ app.get("/admin/users", adminAuthMiddleware, async (req, res) => {
       // ⭐ 根据 IP 获取位置
       const location = await ipToLocation(u.register_ip || u.last_login_ip);
 
-      return {
-        userId: u.address_label,      // ID：如 U556622
-        wallet: u.address,            // 账号（钱包地址）
-        remark: u.remark,             // 备注
+return {
+  userId: u.address_label,      // ID：如 U556622
+  wallet: u.address,            // 账号（钱包地址）
+  remark: u.remark,             // 备注
 
-        // ===== 登录信息 =====
-        loginCount: u.login_count,    // 登录次数
-        lastLogin: u.last_login,      // 登录时间（毫秒）
+  // ===== 登录信息 =====
+  loginCount: u.login_count,    // 登录次数
+  lastLogin: u.last_login,      // 登录时间（毫秒）
 
-        // ===== 注册信息 =====
-        registerIp: u.register_ip,    // 注册时 IP
-        createdAt: u.created_at,      // 注册时时间（毫秒）
+  // ⭐⭐⭐ 新增：最后访问时间（刷新页面自动更新）
+  lastSeen: u.last_seen,
 
-        // ===== 地址（解析 IP 得来）=====
-        addressLabel: location,       // 例如：美国/纽约
+  // ===== 注册信息 =====
+  registerIp: u.register_ip,    // 注册时 IP
+  createdAt: u.created_at,      // 注册时时间（毫秒）
 
-        // ===== 其他 =====
-        verifyStatus: u.verify_status,
-        controlMode: u.control_mode,
-        balances: u.balances || {},
-      };
+  // ===== 地址（解析 IP 得来）=====
+  addressLabel: location,       // 例如：美国/纽约
+
+  // ===== 其他 =====
+  verifyStatus: u.verify_status,
+  controlMode: u.control_mode,
+  balances: u.balances || {},
+};
+
     })
   );
 
