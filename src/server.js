@@ -223,43 +223,18 @@ app.post("/api/auth/verify", async (req, res) => {
 
 
 
-// =========================================================
-//  游客登录
-// =========================================================
-// =========================================================
-//  游客登录（自动绑定设备，不需要钱包地址）
-// =========================================================
+// 游客登录（使用前端提供的永久 UID）
 app.post("/api/guest-login", async (req, res) => {
   try {
-    // 1) 看看 cookie 里有没有之前发的 device_id
-    let deviceId = req.cookies.device_id;
+    const { address } = req.body || {};
+    if (!address) return res.status(400).json({ message: "缺少 address" });
 
-    // 2) 没有则生成一个新的，发回浏览器（10 年不过期）
-    if (!deviceId) {
-      const hex = [...Array(40)]
-        .map(() => Math.floor(Math.random() * 16).toString(16))
-        .join("");
+    const guestAddress = address.toLowerCase();
 
-      deviceId = "dev_" + hex;
-
-res.cookie("device_id", deviceId, {
-  httpOnly: true,
-  sameSite: "Lax", // ⭐ 改这里（非常关键）
-  secure: false,   // ⭐ 强制 false（否则 http 下直接失效）
-  maxAge: 1000 * 60 * 60 * 24 * 365 * 10,
-});
-
-      console.log("✨ New device_id created:", deviceId);
-    } else {
-      console.log("♻ Existing device_id:", deviceId);
-    }
-
-    const guestAddress = deviceId.toLowerCase();
-
-    // 3) 用 deviceId 当 address，创建/获取用户（UID 还是走你原来的逻辑）
+    // 创建 / 获取用户
     const user = await createUserIfNotExists(guestAddress);
 
-    // 4) 记录登录信息
+    // 记录 IP
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
       req.headers["x-real-ip"] ||
@@ -267,7 +242,7 @@ res.cookie("device_id", deviceId, {
       "unknown";
 
     await pool.query(
-      `UPDATE users 
+      `UPDATE users
        SET login_count = login_count + 1,
            last_login = $1,
            register_ip = COALESCE(register_ip, $2),
@@ -276,12 +251,12 @@ res.cookie("device_id", deviceId, {
       [Date.now(), ip, guestAddress]
     );
 
-    // 5) 给前端 token（照旧）
-    const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-
+    // 生成 token
+    const token = jwt.sign(
+      { address: guestAddress },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     res.json({
       data: {
@@ -298,13 +273,7 @@ res.cookie("device_id", deviceId, {
   }
 });
 
-// =========================================================
-//  获取当前设备的 device_id（从 Cookie 里读）
-// =========================================================
-app.get("/api/device-id", (req, res) => {
-  const deviceId = req.cookies.device_id || null;
-  res.json({ deviceId });
-});
+
 
 
 // =========================================================
