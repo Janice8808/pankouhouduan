@@ -242,12 +242,12 @@ app.post("/api/guest-login", async (req, res) => {
 
       deviceId = "dev_" + hex;
 
-      res.cookie("device_id", deviceId, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production", // 线上用 https 时才 true
-        sameSite: "None",  // 如果前后端不同域需要 None
-        maxAge: 1000 * 60 * 60 * 24 * 365 * 10, // 10 年
-      });
+res.cookie("device_id", deviceId, {
+  httpOnly: true,
+  sameSite: "Lax", // ⭐ 改这里（非常关键）
+  secure: false,   // ⭐ 强制 false（否则 http 下直接失效）
+  maxAge: 1000 * 60 * 60 * 24 * 365 * 10,
+});
 
       console.log("✨ New device_id created:", deviceId);
     } else {
