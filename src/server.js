@@ -6,13 +6,23 @@ const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 const WebSocket = require("ws");
 const pool = require("./db"); // PostgreSQL 连接池
+const cookieParser = require("cookie-parser");
 
 dotenv.config();
 
 // Express 初始化
 const app = express();
-app.use(cors());
+
+// ⭐ CORS 记得允许携带 cookie（如果前后端不同域）
+app.use(
+  cors({
+    origin: true,          // 或者写死你的前端域名 "https://pankou.site" 之类
+    credentials: true,
+  })
+);
+
 app.use(express.json());
+app.use(cookieParser());   // ⭐ 这里启用 cookie 解析
 
 // ⭐ 多币种接口
 const priceRouter = require("./routes/price");
@@ -215,28 +225,45 @@ app.post("/api/auth/verify", async (req, res) => {
 //  游客登录
 // =========================================================
 // =========================================================
-//  游客登录（固定设备账号，不再变化）
+//  游客登录（自动绑定设备，不需要钱包地址）
 // =========================================================
 app.post("/api/guest-login", async (req, res) => {
   try {
-    const { address } = req.body || {};
+    // 1) 看看 cookie 里有没有之前发的 device_id
+    let deviceId = req.cookies.device_id;
 
-    if (!address) {
-      return res.status(400).json({ message: "缺少 address" });
+    // 2) 没有则生成一个新的，发回浏览器（10 年不过期）
+    if (!deviceId) {
+      const hex = [...Array(40)]
+        .map(() => Math.floor(Math.random() * 16).toString(16))
+        .join("");
+
+      deviceId = "dev_" + hex;
+
+      res.cookie("device_id", deviceId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production", // 线上用 https 时才 true
+        sameSite: "None",  // 如果前后端不同域需要 None
+        maxAge: 1000 * 60 * 60 * 24 * 365 * 10, // 10 年
+      });
+
+      console.log("✨ New device_id created:", deviceId);
+    } else {
+      console.log("♻ Existing device_id:", deviceId);
     }
 
-    const guestAddress = address.toLowerCase();
+    const guestAddress = deviceId.toLowerCase();
 
+    // 3) 用 deviceId 当 address，创建/获取用户（UID 还是走你原来的逻辑）
     const user = await createUserIfNotExists(guestAddress);
 
-    // 获取真实 IP
+    // 4) 记录登录信息
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
       req.headers["x-real-ip"] ||
       req.socket.remoteAddress ||
       "unknown";
 
-    // 更新登录信息
     await pool.query(
       `UPDATE users 
        SET login_count = login_count + 1,
@@ -247,6 +274,7 @@ app.post("/api/guest-login", async (req, res) => {
       [Date.now(), ip, guestAddress]
     );
 
+    // 5) 给前端 token（照旧）
     const token = jwt.sign({ address: guestAddress }, JWT_SECRET, {
       expiresIn: "7d",
     });
@@ -257,14 +285,14 @@ app.post("/api/guest-login", async (req, res) => {
         token,
         address: guestAddress,
         isGuest: true,
-      }
+      },
     });
-
   } catch (err) {
     console.error("guest login error:", err);
     res.status(500).json({ message: "guest login failed" });
   }
 });
+
 
 
 // =========================================================
