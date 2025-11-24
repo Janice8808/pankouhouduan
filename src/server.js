@@ -13,13 +13,15 @@ dotenv.config();
 // Express 初始化
 const app = express();
 
-// ⭐ CORS 记得允许携带 cookie（如果前后端不同域）
+// ⭐ 允许携带 Cookie 的 CORS
 app.use(
   cors({
-    origin: true,          // 或者写死你的前端域名 "https://pankou.site" 之类
-    credentials: true,
+    origin: true,          // 自动回显 Origin
+    credentials: true,     // 允许带 Cookie
   })
 );
+
+
 
 app.use(express.json());
 app.use(cookieParser());   // ⭐ 这里启用 cookie 解析
@@ -279,20 +281,30 @@ app.post("/api/guest-login", async (req, res) => {
       expiresIn: "7d",
     });
 
+
+
     res.json({
       data: {
         userId: user.address_label,
         token,
         address: guestAddress,
         isGuest: true,
-      },
+      }
     });
+
   } catch (err) {
     console.error("guest login error:", err);
     res.status(500).json({ message: "guest login failed" });
   }
 });
 
+// =========================================================
+//  获取当前设备的 device_id（从 Cookie 里读）
+// =========================================================
+app.get("/api/device-id", (req, res) => {
+  const deviceId = req.cookies.device_id || null;
+  res.json({ deviceId });
+});
 
 
 // =========================================================
