@@ -470,17 +470,19 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
         [profit, now, orderId]
       );
 
-      return res.json({
-        status: 'completed',
-        remainingTime: 0,
-        isWin,
-        profit, // 包含本金的净收益
-        amount,
-        startPrice: openPrice,
-        closePrice: closePrice, // ⭐ 确保这是数字
-        percent,
-        cycle: period
-      });
+// 在后端订单状态查询接口中
+return res.json({
+  status: 'completed',
+  remainingTime: 0,
+  isWin,
+  profit: totalPayout, // 总到账金额（本金+利润，用于更新余额）
+  netProfit: isWin ? (amount * percent) : -amount, // 净盈亏（只显示利润或亏损）
+  amount,
+  startPrice: openPrice,
+  closePrice: closePrice,
+  percent,
+  cycle: period
+});
     }
 
     // 返回订单状态
