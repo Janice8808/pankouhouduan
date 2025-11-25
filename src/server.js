@@ -529,6 +529,7 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
       percent: order.percent
     };
 
+    
     console.log('返回订单状态:', response);
     res.json(response);
 
