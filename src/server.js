@@ -406,13 +406,14 @@ app.post("/api/language", authMiddleware, async (req, res) => {
   res.json({ success: true, language });
 });
 // =========================================================
-// =========================================================
-//  订单状态查询（增强版）
+//  订单状态查询（修复版）
 // =========================================================
 app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.params;
     const address = req.user.address;
+
+    console.log('查询订单状态:', { orderId, address });
 
     // 查询订单信息
     const orderResult = await pool.query(
@@ -424,6 +425,7 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
     );
 
     if (orderResult.rows.length === 0) {
+      console.log('订单不存在:', orderId);
       return res.status(404).json({ message: "订单不存在" });
     }
 
@@ -436,7 +438,15 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
     const elapsed = Math.floor((now - createdAt) / 1000);
     const remainingTime = Math.max(0, period - elapsed);
 
-    // ⭐ 如果订单已过期但未结算，立即结算
+    console.log('订单状态检查:', {
+      orderId,
+      status: order.status,
+      elapsed,
+      period,
+      remainingTime
+    });
+
+    // 如果订单已过期但未结算，立即结算
     if (remainingTime <= 0 && order.status === 'open') {
       console.log('订单到期，开始结算:', orderId);
       
@@ -455,9 +465,25 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
       const profit = isWin ? amount + (amount * percent) : 0;
       const netProfit = isWin ? (amount * percent) : -amount;
 
+      console.log('结算信息:', {
+        isWin, percent, amount, openPrice, closePrice, profit, netProfit
+      });
+
       // 更新用户余额
-      const balances = order.balances || { USDT: 0 };
-      balances.USDT = Number(balances.USDT) + profit;
+      let balances;
+      try {
+        // 确保 balances 是对象
+        balances = typeof order.balances === 'object' ? order.balances : { USDT: 0 };
+        if (!balances.USDT) balances.USDT = 0;
+        
+        const currentUSDT = Number(balances.USDT) || 0;
+        balances.USDT = currentUSDT + profit;
+        
+        console.log('更新余额:', { currentUSDT, profit, newBalance: balances.USDT });
+      } catch (balanceError) {
+        console.error('余额处理错误:', balanceError);
+        balances = { USDT: profit }; // 如果出错，创建新的余额对象
+      }
 
       // 更新用户余额
       await pool.query(
@@ -476,7 +502,7 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
         [profit, now, closePrice, orderId]
       );
 
-      console.log('订单结算完成:', orderId, '盈利:', profit);
+      console.log('订单结算完成:', orderId);
 
       return res.json({
         status: 'completed',
@@ -493,7 +519,7 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
     }
 
     // 返回订单状态
-    res.json({
+    const response = {
       status: order.status,
       remainingTime,
       orderId: order.id,
@@ -501,11 +527,14 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
       startPrice: order.open_price,
       period: order.period,
       percent: order.percent
-    });
+    };
+
+    console.log('返回订单状态:', response);
+    res.json(response);
 
   } catch (err) {
     console.error("order status error:", err);
-    res.status(500).json({ message: "获取订单状态失败" });
+    res.status(500).json({ message: "获取订单状态失败: " + err.message });
   }
 });
 
