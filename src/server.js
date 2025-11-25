@@ -443,15 +443,19 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
                    Math.random() > 0.5;
 
       const percent = Number(order.percent) || 0.25;
-      const profit = isWin ? order.amount * percent : -order.amount;
-
+      const amount = Number(order.amount) || 0;
+      const openPrice = Number(order.open_price) || 0;
+      // ⭐⭐ 修复：计算包含本金的净收益
+      const profit = isWin ? amount + (amount * percent) : 0;
+      const closePrice = openPrice + (Math.random() * 200 - 100);
       // 更新用户余额
       const userResult = await pool.query(
         "SELECT balances FROM users WHERE address = $1",
         [address]
       );
       const balances = userResult.rows[0].balances;
-      balances.USDT = Number(balances.USDT) + profit;
+      const currentUSDT = Number(balances.USDT) || 0;
+      balances.USDT = currentUSDT + profit;
 
       await pool.query(
         "UPDATE users SET balances = $1 WHERE address = $2",
@@ -470,10 +474,10 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
         status: 'completed',
         remainingTime: 0,
         isWin,
-        profit,
-        amount: order.amount,
-        startPrice: order.open_price,
-        closePrice: order.open_price + (Math.random() * 200 - 100), // 模拟收盘价
+        profit, // 包含本金的净收益
+        amount,
+        startPrice: openPrice,
+        closePrice: closePrice, // ⭐ 确保这是数字
         percent,
         cycle: period
       });
@@ -525,6 +529,12 @@ app.post("/api/order/create", authMiddleware, async (req, res) => {
     const { symbol, amount, direction, period, price, percent } = req.body;
     const address = req.user.address;
 
+        // ⭐ 确保价格是数字
+    const numericPrice = Number(price) || 0;
+    const numericAmount = Number(amount) || 0;
+    const numericPercent = Number(percent) || 0.25;
+    const numericPeriod = Number(period) || 60;
+
     // 获取用户余额和控制模式
     const r = await pool.query(
       "SELECT balances, control_mode FROM users WHERE address = $1",
@@ -548,12 +558,13 @@ app.post("/api/order/create", authMiddleware, async (req, res) => {
     const id = "ord_" + Date.now();
     const createdAt = Date.now();
 
-    // ⭐ 使用新的插入语句，包含所有字段
+        // ⭐ 使用数字化的值
     await pool.query(
       `INSERT INTO orders(id, wallet, symbol, amount, direction, status, profit, created_at, period, open_price, percent, control_mode)
        VALUES($1, $2, $3, $4, $5, 'open', 0, $6, $7, $8, $9, $10)`,
-      [id, address, symbol, amount, direction, createdAt, period, price, percent, controlMode]
+      [id, address, symbol, numericAmount, direction, createdAt, numericPeriod, numericPrice, numericPercent, controlMode]
     );
+
 
     // 获取用户备注
     const remarkResult = await pool.query(
