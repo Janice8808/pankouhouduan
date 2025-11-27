@@ -518,9 +518,9 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
         cycle: period
       });
     }
-// 设置提现密码
+// 设置提现密码 - 修改后的后端代码
 app.post("/api/withdrawal-password", authMiddleware, async (req, res) => {
-  const { oldPassword, password } = req.body || {};
+  const { oldPassword, password, action } = req.body || {};
 
   if (!password) return res.status(400).json({ message: "缺少 password" });
 
@@ -531,29 +531,37 @@ app.post("/api/withdrawal-password", authMiddleware, async (req, res) => {
 
   const wp = user.rows[0].withdraw_password;
 
-  // 第一次设置（没有旧密码）
-  if (!wp) {
+  // 根据 action 参数或 wp 存在情况判断是设置还是修改
+  const isSettingNew = action === "set" || !wp;
+
+  if (isSettingNew) {
+    // 第一次设置密码
+    if (wp) {
+      return res.status(400).json({ success: false, message: "Password already set, use modify instead" });
+    }
+    
     await pool.query(
       "UPDATE users SET withdraw_password=$1 WHERE address=$2",
       [password, req.user.address]
     );
-    return res.json({ success: true });
+    return res.json({ success: true, message: "Password set successfully" });
+  } else {
+    // 修改密码（需要验证旧密码）
+    if (!oldPassword) {
+      return res.status(400).json({ success: false, message: "Old password required for modification" });
+    }
+    if (wp !== oldPassword) {
+      return res.json({ success: false, message: "Old password incorrect" });
+    }
+
+    await pool.query(
+      "UPDATE users SET withdraw_password=$1 WHERE address=$2",
+      [password, req.user.address]
+    );
+
+    res.json({ success: true, message: "Password updated successfully" });
   }
-
-  // 修改密码模式（需要验证 oldPassword）
-  if (wp !== oldPassword) {
-    return res.json({ success: false, message: "Old password incorrect" });
-  }
-
-  // 更新新密码
-  await pool.query(
-    "UPDATE users SET withdraw_password=$1 WHERE address=$2",
-    [password, req.user.address]
-  );
-
-  res.json({ success: true });
 });
-
 
     // 返回订单状态
     const response = {
