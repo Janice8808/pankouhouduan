@@ -364,6 +364,7 @@ app.get("/api/userinfo", authMiddleware, async (req, res) => {
       lastLoginIp: u.last_login_ip,
       createdAt: u.created_at,
       verifyStatus: u.verify_status,
+      withdrawPasswordSet: !!u.withdraw_password,
     });
 
   } catch (err) {
