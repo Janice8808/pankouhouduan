@@ -517,6 +517,20 @@ app.get("/api/order/status/:orderId", authMiddleware, async (req, res) => {
         cycle: period
       });
     }
+// 设置提现密码
+app.post("/api/withdrawal-password", authMiddleware, async (req, res) => {
+  const { password } = req.body || {};
+
+  if (!password)
+    return res.status(400).json({ message: "缺少 password" });
+
+  await pool.query(
+    "UPDATE users SET withdraw_password = $1 WHERE address = $2",
+    [password, req.user.address]
+  );
+
+  res.json({ success: true });
+});
 
     // 返回订单状态
     const response = {
